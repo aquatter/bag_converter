@@ -1,3 +1,7 @@
+#include "sensor_msgs/msg/compressed_image.hpp"
+#include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/imu.hpp"
+#include "std_msgs/msg/header.hpp"
 #include <CLI/CLI.hpp>
 #include <GeographicLib/LocalCartesian.hpp>
 #include <cstddef>
@@ -8,7 +12,6 @@
 #include <fmt/color.h>
 #include <fmt/format.h>
 #include <geometry_msgs/msg/pose_stamped.hpp>
-#include <iostream>
 #include <memory>
 #include <opencv2/core/cvstd.hpp>
 #include <opencv2/core/hal/interface.h>
@@ -17,6 +20,8 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
+#include <optional>
+#include <queue>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/serialization.hpp>
 #include <rclcpp/serialized_message.hpp>
@@ -25,14 +30,59 @@
 #include <rosbag2_cpp/reader.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <rosbag2_storage/bag_metadata.hpp>
+#include <rosbag2_storage/serialized_bag_message.hpp>
 #include <rosbag2_storage/storage_options.hpp>
 #include <rosbag2_storage/topic_metadata.hpp>
 #include <rosbag2_transport/reader_writer_factory.hpp>
 #include <rosbag2_transport/record_options.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <string>
 #include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+template <typename MsgType> struct RosMessage {
+  int64_t timestamp_;
+  std::shared_ptr<MsgType> msg_;
+};
+
+struct MessageStorageBase {
+  virtual bool empty() const = 0;
+  virtual ~MessageStorageBase() = default;
+};
+
+template <typename MsgType> struct MessageStorage : MessageStorageBase {
+
+  void put(RosMessage<MsgType> &&msg) { heap_.emplace(std::move(msg)); }
+
+  std::optional<RosMessage<MsgType>> get(size_t queue_size) {
+    if (heap_.empty()) {
+      return std::nullopt;
+    }
+
+    if (heap_.size() < queue_size) {
+      return std::nullopt;
+    }
+
+    const auto msg{heap_.top()};
+    heap_.pop();
+
+    return msg;
+  }
+
+  bool empty() const override { return heap_.empty(); }
+
+  std::priority_queue<RosMessage<MsgType>, std::vector<RosMessage<MsgType>>,
+                      decltype([](const RosMessage<MsgType> &a,
+                                  const RosMessage<MsgType> &b) {
+                        return a.timestamp_ > b.timestamp_;
+                      })>
+      heap_;
+};
 
 class ProgressBar {
 public:
@@ -140,9 +190,9 @@ private:
 class BagConverter {
 public:
   BagConverter(const std::string_view in, const std::string_view out,
-               bool extract_images, bool extract_video)
+               bool extract_images, bool extract_video, float resize)
       : extract_images_{extract_images}, extract_video_{extract_video},
-        output_path_{out} {
+        output_path_{out}, resize_{resize} {
     reader_.open(in.data());
     fmt::print(fmt::fg(fmt::color::aquamarine), "Successfully opened bag: {}\n",
                in.data());
@@ -182,183 +232,194 @@ public:
         cv::Size{width, height}, true});
   }
 
-  void process(float resize = 1.0f) {
+  template <typename MsgType>
+  std::optional<RosMessage<MsgType>> try_pop(const std::string &topic_name,
+                                             size_t queue_size) {
+    if (not msg_map_.contains(topic_name)) {
+      return std::nullopt;
+    }
+
+    auto msg_storage{std::dynamic_pointer_cast<MessageStorage<MsgType>>(
+        msg_map_[topic_name])};
+
+    return msg_storage->get(queue_size);
+  }
+
+  template <typename MsgType>
+  void
+  receive_message(std::shared_ptr<rosbag2_storage::SerializedBagMessage> msg) {
+
+    const rclcpp::SerializedMessage serialized_msg{*msg->serialized_data};
+
+    auto ros_msg{std::make_shared<MsgType>()};
+    rclcpp::Serialization<MsgType> serialization{};
+    serialization.deserialize_message(&serialized_msg, ros_msg.get());
+
+    int64_t timestamp{static_cast<int64_t>(ros_msg->header.stamp.nanosec) +
+                      static_cast<int64_t>(ros_msg->header.stamp.sec) *
+                          1'000'000'000};
+
+    if (not msg_map_.contains(msg->topic_name)) {
+      msg_map_[msg->topic_name] = std::make_shared<MessageStorage<MsgType>>();
+    }
+
+    auto msg_storage{std::dynamic_pointer_cast<MessageStorage<MsgType>>(
+        msg_map_[msg->topic_name])};
+
+    msg_storage->put(
+        RosMessage<MsgType>{.timestamp_ = timestamp, .msg_ = ros_msg});
+  }
+
+  void
+  receive_message(std::shared_ptr<rosbag2_storage::SerializedBagMessage> msg) {
+
+    if (msg->topic_name == "/camera/image_raw/compressed") {
+      receive_message<sensor_msgs::msg::CompressedImage>(std::move(msg));
+    } else if (msg->topic_name == "/camera/image_raw") {
+      receive_message<sensor_msgs::msg::Image>(std::move(msg));
+    } else if (msg->topic_name == "/fix") {
+      receive_message<sensor_msgs::msg::NavSatFix>(std::move(msg));
+    } else if (msg->topic_name == "/imu/mpu6050") {
+      receive_message<sensor_msgs::msg::Imu>(std::move(msg));
+    }
+  }
+
+  void process_message(const std::string &topic_name, size_t queue_size) {
+
+    if (topic_name == "/camera/image_raw/compressed" or
+        topic_name == "/camera/image_raw") {
+      auto [img, header] = process_image(topic_name, queue_size);
+
+      if (img.empty()) {
+        return;
+      }
+
+      const rclcpp::Time time{header.stamp.sec, header.stamp.nanosec};
+
+      if (extract_video_) {
+        if (not video_writer_) {
+          init_video_writer(img.cols, img.rows);
+        }
+
+        video_writer_->write(img);
+      } else if (extract_images_) {
+        cv::imwrite(fmt::format("{}/{}.png", output_path_, time.nanoseconds()),
+                    img);
+      } else {
+        sensor_msgs::msg::Image raw_img;
+
+        raw_img.header = header;
+        raw_img.height = img.rows;
+        raw_img.width = img.cols;
+        raw_img.encoding = "bgr8";
+        raw_img.is_bigendian = false;
+        raw_img.step = img.step;
+        raw_img.data.assign(img.data,
+                            img.data + img.cols * img.rows * img.channels());
+
+        writer_.write(raw_img, "/camera/image_raw", time);
+      }
+    } else if (topic_name == "/fix") {
+
+      if (auto ros_msg{
+              try_pop<sensor_msgs::msg::NavSatFix>(topic_name, queue_size)};
+          ros_msg.has_value()) {
+
+        geometry_msgs::msg::PoseStamped pose_msg;
+        pose_msg.header = ros_msg->msg_->header;
+
+        const rclcpp::Time time{ros_msg->msg_->header.stamp.sec,
+                                ros_msg->msg_->header.stamp.nanosec};
+
+        if (not local_converter_) {
+          local_converter_ = std::make_shared<GeographicLib::LocalCartesian>(
+              ros_msg->msg_->latitude, ros_msg->msg_->longitude,
+              ros_msg->msg_->altitude);
+
+        } else {
+          local_converter_->Forward(
+              ros_msg->msg_->latitude, ros_msg->msg_->longitude,
+              ros_msg->msg_->altitude, pose_msg.pose.position.x,
+              pose_msg.pose.position.y, pose_msg.pose.position.z);
+        }
+
+        writer_.write(*(ros_msg->msg_), topic_name, time);
+        writer_.write(pose_msg, "/gp_data", time);
+      }
+
+    } else if (topic_name == "/imu/mpu6050") {
+
+      if (auto ros_msg{try_pop<sensor_msgs::msg::Imu>(topic_name, queue_size)};
+          ros_msg.has_value()) {
+
+        writer_.write(*(ros_msg->msg_), topic_name,
+                      rclcpp::Time{ros_msg->msg_->header.stamp.sec,
+                                   ros_msg->msg_->header.stamp.nanosec});
+      }
+    }
+  }
+
+  std::tuple<cv::Mat_<cv::Vec3b>, std_msgs::msg::Header>
+  process_image(const std::string &topic_name, size_t queue_size) {
+    if (topic_name == "/camera/image_raw/compressed") {
+
+      if (auto ros_msg{try_pop<sensor_msgs::msg::CompressedImage>(topic_name,
+                                                                  queue_size)};
+          ros_msg.has_value()) {
+
+        cv::Mat_<cv::Vec3b> img =
+            cv::imdecode(ros_msg->msg_->data, cv::IMREAD_UNCHANGED);
+
+        if (resize_ != 1.0f) {
+          cv::resize(img, img,
+                     {static_cast<int>(img.cols * resize_),
+                      static_cast<int>(img.rows * resize_)});
+        }
+
+        return {img, ros_msg->msg_->header};
+      }
+    } else if (topic_name == "/camera/image_raw") {
+
+      if (auto ros_msg{
+              try_pop<sensor_msgs::msg::Image>(topic_name, queue_size)};
+          ros_msg.has_value()) {
+
+        cv::Mat_<cv::Vec3b> img =
+            cv::Mat_<uint8_t>{ros_msg->msg_->data, true}.reshape(
+                3, ros_msg->msg_->height);
+
+        if (resize_ != 1.0f) {
+          cv::resize(img, img,
+                     {static_cast<int>(img.cols * resize_),
+                      static_cast<int>(img.rows * resize_)});
+        }
+
+        return {img, ros_msg->msg_->header};
+      }
+    }
+
+    return {cv::Mat_<cv::Vec3b>{}, std_msgs::msg::Header{}};
+  }
+
+  void process() {
 
     ProgressBar bar{reader_.get_metadata().topics_with_message_count};
     bar.draw();
 
-    bool initial_gps_reading{true};
-    GeographicLib::LocalCartesian local_converter{};
-
     while (reader_.has_next()) {
       auto msg{reader_.read_next()};
-
-      if (extract_images_ or extract_video_) {
-        if (msg->topic_name == "/camera/image_raw/compressed") {
-
-          const rclcpp::SerializedMessage serialized_msg{*msg->serialized_data};
-          sensor_msgs::msg::CompressedImage compressed_img_msg;
-
-          serialization_compressed_.deserialize_message(&serialized_msg,
-                                                        &compressed_img_msg);
-
-          cv::Mat_<cv::Vec3b> img =
-              cv::imdecode(compressed_img_msg.data, cv::IMREAD_UNCHANGED);
-
-          if (resize != 1.0f) {
-            cv::resize(img, img,
-                       {static_cast<int>(img.cols * resize),
-                        static_cast<int>(img.rows * resize)});
-          }
-
-          const uint64_t timestamp{
-              static_cast<uint64_t>(compressed_img_msg.header.stamp.nanosec) +
-              static_cast<uint64_t>(compressed_img_msg.header.stamp.sec) *
-                  1'000'000'000};
-
-          if (extract_video_) {
-            if (not video_writer_) {
-              init_video_writer(img.cols, img.rows);
-            }
-
-            video_writer_->write(img);
-          } else {
-            cv::imwrite(fmt::format("{}/{}.png", output_path_, timestamp), img);
-          }
-
-        } else if (msg->topic_name == "/camera/image_raw") {
-
-          const rclcpp::SerializedMessage serialized_msg{*msg->serialized_data};
-
-          sensor_msgs::msg::Image img_msg;
-          serialization_raw_.deserialize_message(&serialized_msg, &img_msg);
-
-          cv::Mat_<cv::Vec3b> img =
-              cv::Mat_<uint8_t>{img_msg.data, true}.reshape(3, img_msg.height);
-
-          if (resize != 1.0f) {
-            cv::resize(img, img,
-                       {static_cast<int>(img.cols * resize),
-                        static_cast<int>(img.rows * resize)});
-          }
-
-          const uint64_t timestamp{
-              static_cast<uint64_t>(img_msg.header.stamp.nanosec) +
-              static_cast<uint64_t>(img_msg.header.stamp.sec) * 1'000'000'000};
-
-          if (extract_video_) {
-            if (not video_writer_) {
-              init_video_writer(img.cols, img.rows);
-            }
-
-            video_writer_->write(img);
-          } else {
-            cv::imwrite(fmt::format("{}/{}.png", output_path_, timestamp), img);
-          }
-        }
-
-      } else {
-
-        if (msg->topic_name == "/fix") {
-          writer_.write(msg, msg->topic_name, "sensor_msgs/msg/NavSatFix");
-
-          const rclcpp::SerializedMessage serialized_msg{*msg->serialized_data};
-          sensor_msgs::msg::NavSatFix gps_msg;
-          serialization_gps_.deserialize_message(&serialized_msg, &gps_msg);
-
-          geometry_msgs::msg::PoseStamped pose_msg;
-          pose_msg.header = gps_msg.header;
-
-          if (initial_gps_reading) {
-            local_converter = GeographicLib::LocalCartesian{
-                gps_msg.latitude, gps_msg.longitude, gps_msg.altitude};
-            initial_gps_reading = false;
-          } else {
-            local_converter.Forward(gps_msg.latitude, gps_msg.longitude,
-                                    gps_msg.altitude, pose_msg.pose.position.x,
-                                    pose_msg.pose.position.y,
-                                    pose_msg.pose.position.z);
-          }
-
-          writer_.write(pose_msg, "/gp_data",
-                        rclcpp::Time{msg->send_timestamp});
-
-        } else if (msg->topic_name == "/imu/mpu6050") {
-          writer_.write(msg, msg->topic_name, "sensor_msgs/msg/Imu");
-
-        } else if (msg->topic_name == "/camera/image_raw/compressed") {
-
-          const rclcpp::SerializedMessage serialized_msg{*msg->serialized_data};
-          sensor_msgs::msg::CompressedImage compressed_img_msg;
-
-          serialization_compressed_.deserialize_message(&serialized_msg,
-                                                        &compressed_img_msg);
-
-          cv::Mat_<cv::Vec3b> img =
-              cv::imdecode(compressed_img_msg.data, cv::IMREAD_UNCHANGED);
-
-          if (resize != 1.0f) {
-            cv::resize(img, img,
-                       {static_cast<int>(img.cols * resize),
-                        static_cast<int>(img.rows * resize)});
-          }
-
-          // cv::imwrite("test.png", img);
-
-          sensor_msgs::msg::Image raw_img;
-
-          raw_img.header = compressed_img_msg.header;
-          raw_img.height = img.rows;
-          raw_img.width = img.cols;
-          raw_img.encoding = "bgr8";
-          raw_img.is_bigendian = false;
-          raw_img.step = img.step;
-          raw_img.data.assign(img.data,
-                              img.data + img.cols * img.rows * img.channels());
-
-          writer_.write(raw_img, "/camera/image_raw",
-                        rclcpp::Time{msg->send_timestamp});
-        } else if (msg->topic_name == "/camera/image_raw") {
-
-          if (resize == 1.0f) {
-            writer_.write(msg, msg->topic_name, "sensor_msgs/msg/Image");
-          } else {
-
-            const rclcpp::SerializedMessage serialized_msg{
-                *msg->serialized_data};
-            sensor_msgs::msg::Image img_msg;
-
-            serialization_raw_.deserialize_message(&serialized_msg, &img_msg);
-
-            cv::Mat_<cv::Vec3b> img =
-                cv::Mat_<uint8_t>{img_msg.data, true}.reshape(3,
-                                                              img_msg.height);
-
-            cv::resize(img, img,
-                       {static_cast<int>(img.cols * resize),
-                        static_cast<int>(img.rows * resize)});
-
-            sensor_msgs::msg::Image raw_img;
-
-            raw_img.header = img_msg.header;
-            raw_img.height = img.rows;
-            raw_img.width = img.cols;
-            raw_img.encoding = "bgr8";
-            raw_img.is_bigendian = false;
-            raw_img.step = img.step;
-            raw_img.data.assign(img.data, img.data + img.cols * img.rows *
-                                                         img.channels());
-
-            writer_.write(raw_img, msg->topic_name,
-                          rclcpp::Time{msg->send_timestamp});
-          }
-        }
-      }
-
+      receive_message(msg);
+      process_message(msg->topic_name, 10);
       bar.advance(msg->topic_name);
     }
 
     bar.done();
+
+    for (auto &&[topic_name, storage] : msg_map_) {
+      while (not storage->empty()) {
+        process_message(topic_name, 1);
+      }
+    }
   }
 
   ~BagConverter() {
@@ -379,6 +440,9 @@ private:
   std::string output_path_;
   std::unique_ptr<cv::VideoWriter> video_writer_;
   std::string video_path_;
+  std::unordered_map<std::string, std::shared_ptr<MessageStorageBase>> msg_map_;
+  float resize_{1.0};
+  std::shared_ptr<GeographicLib::LocalCartesian> local_converter_;
 };
 
 int main(int argc, char const *const *argv) {
@@ -407,8 +471,10 @@ int main(int argc, char const *const *argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    BagConverter cvt{input_bag, output_bag, extract_images, extract_video};
-    cvt.process(resize);
+    BagConverter cvt{input_bag, output_bag, extract_images, extract_video,
+                     resize};
+
+    cvt.process();
   } catch (const std::exception &ex) {
     fmt::print(fmt::fg(fmt::color::red), "{}\n", ex.what());
   }

@@ -9,7 +9,14 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${command:cmake.launchTargetPath}",
-            "args": [],
+            "args": [
+                "-i",
+                "/root/data/rosbag2_2025_08_21-09_09_38/",
+                "-o",
+                "/root/data/rosbag2_2025_08_21-09_09_38_resized_jazzy/",
+                "-r",
+                "0.25"
+            ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [
