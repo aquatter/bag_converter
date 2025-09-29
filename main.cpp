@@ -39,8 +39,8 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <stdexcept>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -187,31 +187,41 @@ private:
   int curr_pos_;
 };
 
+struct BagConverterSettings {
+  std::string input_bag_;
+  std::string output_bag_;
+  bool extract_images_;
+  bool extract_video_;
+  float resize_;
+  int64_t start_time_;
+  int64_t end_time_;
+};
+
 class BagConverter {
 public:
-  BagConverter(const std::string_view in, const std::string_view out,
-               bool extract_images, bool extract_video, float resize)
-      : extract_images_{extract_images}, extract_video_{extract_video},
-        output_path_{out}, resize_{resize} {
-    reader_.open(in.data());
+  BagConverter(const BagConverterSettings &set)
+      : extract_images_{set.extract_images_},
+        extract_video_{set.extract_video_}, output_path_{set.output_bag_},
+        resize_{set.resize_} {
+    reader_.open(set.input_bag_);
     fmt::print(fmt::fg(fmt::color::aquamarine), "Successfully opened bag: {}\n",
-               in.data());
+               set.input_bag_);
 
     if (not(extract_images_ or extract_video_)) {
       rosbag2_storage::StorageOptions storage_options;
-      storage_options.uri = out.data();
+      storage_options.uri = set.output_bag_;
       storage_options.max_bagfile_duration = 30;
 
       writer_.open(storage_options);
     }
 
     if (extract_images_) {
-      if (not std::filesystem::exists(out)) {
-        std::filesystem::create_directory(out);
+      if (not std::filesystem::exists(set.output_bag_)) {
+        std::filesystem::create_directory(set.output_bag_);
       }
 
       fmt::print(fmt::fg(fmt::color::aquamarine), "Extracting images to: {}\n",
-                 out.data());
+                 set.output_bag_);
     }
 
     if (extract_video_) {
@@ -223,6 +233,36 @@ public:
       fmt::print(fmt::fg(fmt::color::aquamarine), "Extracting video to: {}\n",
                  video_path_);
     }
+
+    const int64_t bag_duration{reader_.get_metadata().duration.count()};
+
+    const int64_t start_timestamp{
+        reader_.get_metadata().starting_time.time_since_epoch().count()};
+
+    start_time_ = 1'000'000'000l * set.start_time_;
+    end_time_ = 1'000'000'000l * set.end_time_;
+
+    start_time_ = start_time_ < 0 ? 0 : start_time_;
+    end_time_ = end_time_ < 0 ? bag_duration : end_time_;
+
+    if (start_time_ > bag_duration) {
+      throw std::runtime_error{"start time beyond bag duration"};
+    }
+
+    if (end_time_ > bag_duration) {
+      fmt::print(fmt::fg(fmt::color::orange),
+                 "warning, end time exeeds bag duration and got truncated\n");
+
+      end_time_ = bag_duration;
+    }
+
+    if (start_time_ >= end_time_) {
+      throw std::runtime_error{
+          "start time greater or equal to end time, nothing to convert"};
+    }
+
+    start_time_ += start_timestamp;
+    end_time_ += start_timestamp;
   }
 
   void init_video_writer(int width, int height) {
@@ -279,7 +319,7 @@ public:
       receive_message<sensor_msgs::msg::Image>(std::move(msg));
     } else if (msg->topic_name == "/fix") {
       receive_message<sensor_msgs::msg::NavSatFix>(std::move(msg));
-    } else if (msg->topic_name == "/imu/mpu6050") {
+    } else if (msg->topic_name == "/imu") {
       receive_message<sensor_msgs::msg::Imu>(std::move(msg));
     }
   }
@@ -347,7 +387,7 @@ public:
         writer_.write(pose_msg, "/gp_data", time);
       }
 
-    } else if (topic_name == "/imu/mpu6050") {
+    } else if (topic_name == "/imu") {
 
       if (auto ros_msg{try_pop<sensor_msgs::msg::Imu>(topic_name, queue_size)};
           ros_msg.has_value()) {
@@ -408,8 +448,19 @@ public:
 
     while (reader_.has_next()) {
       auto msg{reader_.read_next()};
+
+      if (msg->recv_timestamp < start_time_) {
+        bar.advance(msg->topic_name);
+        continue;
+      }
+
+      if (msg->recv_timestamp > end_time_) {
+        break;
+      }
+
       receive_message(msg);
       process_message(msg->topic_name, 10);
+
       bar.advance(msg->topic_name);
     }
 
@@ -443,6 +494,8 @@ private:
   std::unordered_map<std::string, std::shared_ptr<MessageStorageBase>> msg_map_;
   float resize_{1.0};
   std::shared_ptr<GeographicLib::LocalCartesian> local_converter_;
+  int64_t start_time_;
+  int64_t end_time_;
 };
 
 int main(int argc, char const *const *argv) {
@@ -450,29 +503,32 @@ int main(int argc, char const *const *argv) {
   try {
     CLI::App app{"Bag Converter"};
 
-    std::string input_bag, output_bag;
-    app.add_option("-i, --input", input_bag, "Specify input bag path")
+    BagConverterSettings set{};
+
+    app.add_option("-i, --input", set.input_bag_, "Specify input bag path")
         ->required()
         ->check(CLI::ExistingDirectory);
 
-    app.add_option("-o, --output", output_bag, "Specify output path")
+    app.add_option("-o, --output", set.output_bag_, "Specify output path")
         ->required();
 
-    float resize{1.0f};
-    app.add_option("-r, --resize", resize)->default_val(1.0f);
+    app.add_option("-r, --resize", set.resize_)->default_val(1.0f);
 
-    bool extract_images{false};
-    app.add_flag("-e, --extract", extract_images, "Extract images")
+    app.add_flag("-e, --extract", set.extract_images_, "Extract images")
         ->default_val(false);
 
-    bool extract_video{false};
-    app.add_flag("-v, --video", extract_video, "Extract video")
+    app.add_flag("-v, --video", set.extract_video_, "Extract video")
         ->default_val(false);
+
+    app.add_option("--start", set.start_time_, "Start time to process, s")
+        ->default_val(-1);
+
+    app.add_option("--end", set.end_time_, "End time to process, s")
+        ->default_val(-1);
 
     CLI11_PARSE(app, argc, argv);
 
-    BagConverter cvt{input_bag, output_bag, extract_images, extract_video,
-                     resize};
+    BagConverter cvt{set};
 
     cvt.process();
   } catch (const std::exception &ex) {
