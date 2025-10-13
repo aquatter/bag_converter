@@ -1,7 +1,4 @@
 #include "sensor_msgs/msg/compressed_image.hpp"
-#include "sensor_msgs/msg/image.hpp"
-#include "sensor_msgs/msg/imu.hpp"
-#include "std_msgs/msg/header.hpp"
 #include <CLI/CLI.hpp>
 #include <GeographicLib/LocalCartesian.hpp>
 #include <cstddef>
@@ -458,8 +455,41 @@ public:
         break;
       }
 
-      receive_message(msg);
-      process_message(msg->topic_name, 10);
+      if (msg->topic_name == "/camera/image_raw/compressed") {
+        const rclcpp::SerializedMessage serialized_msg{*msg->serialized_data};
+
+        sensor_msgs::msg::CompressedImage ros_msg{};
+        rclcpp::Serialization<sensor_msgs::msg::CompressedImage>
+            serialization{};
+
+        serialization.deserialize_message(&serialized_msg, &ros_msg);
+
+        cv::Mat_<cv::Vec3b> img =
+            cv::imdecode(ros_msg.data, cv::IMREAD_UNCHANGED);
+
+        sensor_msgs::msg::Image raw_img;
+
+        raw_img.header = ros_msg.header;
+        raw_img.height = img.rows;
+        raw_img.width = img.cols;
+        raw_img.encoding = "bgr8";
+        raw_img.is_bigendian = false;
+        raw_img.step = img.step;
+        raw_img.data.assign(img.data,
+                            img.data + img.cols * img.rows * img.channels());
+
+        writer_.write(raw_img, "/camera/image_raw",
+                      rclcpp::Time{msg->recv_timestamp});
+
+      } else if (msg->topic_name == "/imu" or
+                 msg->topic_name == "/bmi160/imu") {
+        writer_.write(msg, msg->topic_name, "sensor_msgs/msg/Imu");
+      } else if (msg->topic_name == "/fix") {
+        writer_.write(msg, "/fix", "sensor_msgs/msg/NavSatFix");
+      }
+
+      // receive_message(msg);
+      // process_message(msg->topic_name, 10);
 
       bar.advance(msg->topic_name);
     }

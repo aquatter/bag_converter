@@ -11,11 +11,11 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-i",
-                "/root/data/rosbag2_2025_08_21-09_09_38/",
+                "~/data2/video_domodedovo/VID_20250929_134020.mp4",
                 "-o",
-                "/root/data/rosbag2_2025_08_21-09_09_38_resized_jazzy/",
-                "-r",
-                "0.25"
+                "~/data2/video_domodedovo/VID_20250929_134020/",
+                "-g",
+                "~/data2/video_domodedovo/video20250831-125017.gpx"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

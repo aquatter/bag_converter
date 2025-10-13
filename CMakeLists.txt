@@ -9,6 +9,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(OpenCV REQUIRED core imgproc imgcodecs videoio)
 find_package(GeographicLib REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(tinyxml2 REQUIRED)
 
 add_subdirectory(CLI11)
 
@@ -17,7 +19,7 @@ add_subdirectory(CLI11)
 
 add_executable(${PROJECT_NAME} main.cpp)
 
-target_link_libraries(${PROJECT_NAME} 
+target_link_libraries(${PROJECT_NAME}
     ${OpenCV_LIBS}
     fmt::fmt
     rcl::rcl
@@ -28,7 +30,29 @@ target_link_libraries(${PROJECT_NAME}
     ${GeographicLib_LIBRARIES}
 )
 
-set_target_properties(${PROJECT_NAME} PROPERTIES 
-    CXX_STANDARD 20 
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED YES
+)
+
+add_executable(video_to_bag video_to_bag.cpp src/progress_bar.cpp)
+
+target_include_directories(video_to_bag PRIVATE include)
+
+target_link_libraries(video_to_bag
+    ${OpenCV_LIBS}
+    fmt::fmt
+    rcl::rcl
+    rosbag2_cpp::rosbag2_cpp
+    rosbag2_transport::rosbag2_transport
+    sensor_msgs::sensor_msgs_library
+    CLI11
+    Eigen3::Eigen
+    ${GeographicLib_LIBRARIES}
+    tinyxml2::tinyxml2
+)
+
+set_target_properties(video_to_bag PROPERTIES
+    CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
 )
