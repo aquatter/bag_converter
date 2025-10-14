@@ -11,6 +11,7 @@ find_package(OpenCV REQUIRED core imgproc imgcodecs videoio)
 find_package(GeographicLib REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(tinyxml2 REQUIRED)
+find_package(range-v3 REQUIRED)
 
 add_subdirectory(CLI11)
 
@@ -53,6 +54,44 @@ target_link_libraries(video_to_bag
 )
 
 set_target_properties(video_to_bag PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED YES
+)
+
+
+add_executable(gopro_to_bag
+    gopro_to_bag.cpp
+    src/progress_bar.cpp
+    src/gpmf_parser.cpp
+    src/gpmf_frame.cpp
+    gpmf-parser/demo/GPMF_mp4reader.c
+    gpmf-parser/demo/GPMF_print.c
+    gpmf-parser/GPMF_parser.c
+    gpmf-parser/GPMF_utils.c
+)
+
+target_include_directories(gopro_to_bag
+    PRIVATE
+    include
+    gpmf-parser
+    gpmf-parser/demo
+)
+
+target_link_libraries(gopro_to_bag
+    ${OpenCV_LIBS}
+    fmt::fmt
+    rcl::rcl
+    rosbag2_cpp::rosbag2_cpp
+    rosbag2_transport::rosbag2_transport
+    sensor_msgs::sensor_msgs_library
+    CLI11
+    Eigen3::Eigen
+    ${GeographicLib_LIBRARIES}
+    tinyxml2::tinyxml2
+    range-v3::range-v3 range-v3::meta range-v3::concepts
+)
+
+set_target_properties(gopro_to_bag PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
 )

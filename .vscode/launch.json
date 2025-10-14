@@ -11,11 +11,10 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-i",
-                "~/data2/video_domodedovo/VID_20250929_134020.mp4",
+                "~/data/test_gopro/GH010137.MP4",
                 "-o",
-                "~/data2/video_domodedovo/VID_20250929_134020/",
-                "-g",
-                "~/data2/video_domodedovo/video20250831-125017.gpx"
+                "~/data/test_gopro/GH010137/",
+                "--compressed"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

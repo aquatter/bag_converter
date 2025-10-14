@@ -1,6 +1,4 @@
 
-#include "CLI/CLI.hpp"
-#include "sensor_msgs/msg/compressed_image.hpp"
 #include <CLI/CLI.hpp>
 #include <chrono>
 #include <cstddef>

@@ -1,3 +1,6 @@
 [submodule "CLI11"]
 	path = CLI11
 	url = https://github.com/CLIUtils/CLI11.git
+[submodule "gpmf-parser"]
+	path = gpmf-parser
+	url = git@github.com:gopro/gpmf-parser.git
