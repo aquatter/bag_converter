@@ -151,9 +151,9 @@ void IMUChunk::add(const std::string_view fourcc_str, uint64_t timestamp,
   d.val_.resize(num_elements);
 
   for (auto &&i : ints(0ul, num_elements)) {
-    d.val_[i].x() = vec[i * num_components_];
-    d.val_[i].y() = vec[i * num_components_ + 1];
-    d.val_[i].z() = vec[i * num_components_ + 2];
+    d.val_[i].x() = vec[i * num_components_ + 1];
+    d.val_[i].y() = vec[i * num_components_ + 2];
+    d.val_[i].z() = vec[i * num_components_];
   }
 
   if (fourcc_str == "ACCL") {

@@ -31,7 +31,7 @@ struct VideoProcessSettings {
   bool extract_images_;
   bool compressed_;
   float resize_;
-  int jpeq_quality_;
+  int jpeg_quality_;
 };
 
 struct GPSCoord {
@@ -228,7 +228,7 @@ public:
 
           compressed_img.format = "jpeg";
           cv::imencode(".jpeg", img, compressed_img.data,
-                       {cv::IMWRITE_JPEG_QUALITY, set_.jpeq_quality_});
+                       {cv::IMWRITE_JPEG_QUALITY, set_.jpeg_quality_});
 
           writer_->write(compressed_img, "/camera/image_raw/compressed",
                          rclcpp::Time{curr_timestamp});
@@ -315,10 +315,10 @@ int main(int argc, char const *const *argv) {
     app.add_flag("-e, --extract", set.extract_images_, "Extract images")
         ->default_val(false);
 
-    app.add_flag("--compressed", set.compressed_, "Extract images")
+    app.add_flag("--compressed", set.compressed_, "Create compressed topic")
         ->default_val(false);
 
-    app.add_option("--quality", set.jpeq_quality_, "JPEG quality")
+    app.add_option("--quality", set.jpeg_quality_, "JPEG quality")
         ->check(CLI::Range{0, 100})
         ->default_val(70);
 

@@ -1,3 +1,4 @@
+#include "CLI/CLI.hpp"
 #include <CLI/CLI.hpp>
 #include <cstdlib>
 #include <exception>
@@ -10,16 +11,19 @@ int main(int argc, char const *const *argv) {
   try {
     GPMFParserSettings set{};
 
-    CLI::App app{"Convert GOPRO video to ROS bag"};
+    CLI::App app{"Convert GOPRO video to ROS2 bag"};
 
     app.add_option("-i, --input", set.path_to_mp4_, "Specify input video path")
         ->required()
         ->check(CLI::ExistingFile);
 
     app.add_option("-o, --output", set.output_path_,
-                   "Specify output ros bag path");
+                   "Specify output ros2 bag path")
+        ->required();
 
-    app.add_option("-r, --resize", set.resize_)->default_val(1.0);
+    app.add_option("-r, --resize", set.resize_, "Resize factor")
+        ->check(CLI::Range{0.0, 1.0})
+        ->default_val(1.0);
 
     app.add_flag("-e, --extract", set.extract_images_, "Extract images")
         ->default_val(false);
