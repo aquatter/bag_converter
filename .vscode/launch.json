@@ -11,10 +11,12 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-i",
-                "~/data/test_gopro/GH010137.MP4",
+                "~/data/academ_16_10/academ_wide_stab_off_0.MP4",
                 "-o",
-                "~/data/test_gopro/GH010137/",
-                "--compressed"
+                "~/data/academ_16_10/test/",
+                "--compressed",
+                "-r",
+                "0.1"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

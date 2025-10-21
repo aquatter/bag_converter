@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <opencv2/videoio.hpp>
 #include <optional>
 #include <rosbag2_cpp/writer.hpp>
@@ -27,15 +28,18 @@ struct GPMFChunkBase {
   virtual std::optional<int64_t> timestamp() = 0;
   virtual void write(rosbag2_cpp::Writer &writer) = 0;
 
-  void reset() { index_ = 0; }
+  virtual void reset() = 0;
 
+  void set_frame_rate(double frame_rate) noexcept { frame_rate_ = frame_rate; }
+
+  virtual void open_mp4(const std::string_view path_to_mp4) = 0;
+
+  double frame_rate_;
   size_t index_{0};
 };
 
 struct SHUTChunkSettings {
-  double frame_rate_;
   double resize_;
-  std::string path_to_mp4_;
   std::string output_path_;
   int jpeg_quality_;
   bool extract_images_;
@@ -72,31 +76,35 @@ struct SHUTChunk : GPMFChunkBase {
 
   void write(rosbag2_cpp::Writer &writer) override;
 
+  void reset() override;
+
+  void open_mp4(const std::string_view path_to_mp4) override;
+
   ~SHUTChunk();
 
   static constexpr std::array<std::string_view, 1> fourcc_str_{"SHUT"};
   std::vector<Data> data_;
 
   SHUTChunkSettings set_;
-  cv::VideoCapture cap_;
+  std::unique_ptr<cv::VideoCapture> cap_;
 
   std::vector<int64_t> measurements_;
 };
 
 struct GPS5Chunk : GPMFChunkBase {
 
-  GPS5Chunk(double frame_rate) : frame_rate_{frame_rate} {}
-
   struct Data {
     int64_t timestamp_;
     std::vector<Eigen::Vector3d> lla_;
-    std::vector<Eigen::Vector2d> vel_;
+    std::vector<double> vel2d_;
+    std::vector<double> vel3d_;
   };
 
   struct Measurement {
     int64_t timestamp_;
     Eigen::Vector3d lla_;
-    Eigen::Vector2d vel_;
+    double vel2d_;
+    double vel3d_;
   };
 
   std::span<const std::string_view> four_cc() const override {
@@ -120,23 +128,17 @@ struct GPS5Chunk : GPMFChunkBase {
 
   void write(rosbag2_cpp::Writer &writer) override;
 
+  void reset() override;
+
+  void open_mp4(const std::string_view path_to_mp4) override {}
+
   static constexpr size_t num_components_{5};
   static constexpr std::array<std::string_view, 1> fourcc_str_{"GPS5"};
   std::vector<Data> data_;
-  double frame_rate_;
   std::vector<Measurement> measurements_;
 };
 
 struct IMUChunk : GPMFChunkBase {
-
-  IMUChunk(double accl_rate, double gyro_rate)
-      : accl_rate_{accl_rate}, gyro_rate_{gyro_rate} {
-
-    if (accl_rate_ != gyro_rate_) {
-      throw std::runtime_error{
-          "accelerometer and gyroscope rates are not the same"};
-    }
-  }
 
   struct Data {
     int64_t timestamp_;
@@ -170,14 +172,14 @@ struct IMUChunk : GPMFChunkBase {
 
   void write(rosbag2_cpp::Writer &writer) override;
 
-  std::vector<Data> accl_data_;
-  std::vector<Data> gyro_data_;
+  void reset() override;
+
+  void open_mp4(const std::string_view path_to_mp4) override {}
 
   static constexpr size_t num_components_{3};
   static constexpr std::array<std::string_view, 2> fourcc_str_{"ACCL", "GYRO"};
 
-  double accl_rate_;
-  double gyro_rate_;
-
+  std::vector<Data> accl_data_;
+  std::vector<Data> gyro_data_;
   std::vector<Measurement> measurements_;
 };

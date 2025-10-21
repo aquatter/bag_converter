@@ -13,7 +13,8 @@ int main(int argc, char const *const *argv) {
 
     CLI::App app{"Convert GOPRO video to ROS2 bag"};
 
-    app.add_option("-i, --input", set.path_to_mp4_, "Specify input video path")
+    app.add_option("-i, --input", set.paths_to_mp4_,
+                   "Specify input video paths")
         ->required()
         ->check(CLI::ExistingFile);
 
@@ -38,8 +39,10 @@ int main(int argc, char const *const *argv) {
     CLI11_PARSE(app, argc, argv);
 
     if (std::filesystem::exists(set.output_path_)) {
-      fmt::print(fmt::fg(fmt::color::yellow_green),
-                 "Path '{}' already exists. Remove? [y/n] ", set.output_path_);
+      fmt::print("\e[38;2;154;205;50mPath\e[0m \e[38;2;255;127;80m'{}'\e[0m "
+                 "\e[38;2;154;205;50malready "
+                 "exists. Remove? [y/n] \e[0m",
+                 set.output_path_);
 
       char ans{};
       std::cin >> ans;
@@ -53,7 +56,6 @@ int main(int argc, char const *const *argv) {
 
     GPMFParser gpmf_parser{set};
     gpmf_parser.parse();
-    gpmf_parser.write_bag();
 
   } catch (const std::exception &ex) {
     fmt::print(fmt::fg(fmt::color::red), "{}\n", ex.what());

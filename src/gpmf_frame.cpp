@@ -7,6 +7,7 @@
 // clang-format on
 #include <fmt/format.h>
 #include <gpmf_frame.hpp>
+#include <memory>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
@@ -28,16 +29,13 @@ using ranges::views::sliding;
 using ranges::views::transform;
 using ranges::views::zip;
 
-SHUTChunk::SHUTChunk(const SHUTChunkSettings &set)
-    : set_{set}, cap_{set_.path_to_mp4_} {
+SHUTChunk::SHUTChunk(const SHUTChunkSettings &set) : set_{set} {}
 
-  if (not cap_.isOpened()) {
-    throw std::runtime_error{
-        fmt::format("unable to open video: {}", set_.path_to_mp4_.data())};
+SHUTChunk::~SHUTChunk() {
+  if (cap_ and cap_->isOpened()) {
+    cap_->release();
   }
 }
-
-SHUTChunk::~SHUTChunk() { cap_.release(); }
 
 void SHUTChunk::add(const std::string_view, uint64_t timestamp,
                     std::span<const double> vec) {
@@ -50,7 +48,7 @@ void SHUTChunk::create_measurements() {
       data_ | transform([](const Data &d) { return d.num_frames_; }), 0ul)};
 
   const auto num_frames{
-      static_cast<uint64_t>(cap_.get(cv::CAP_PROP_FRAME_COUNT))};
+      static_cast<uint64_t>(cap_->get(cv::CAP_PROP_FRAME_COUNT))};
 
   // if (total_num != num_frames) {
   //   throw std::runtime_error{
@@ -70,7 +68,7 @@ void SHUTChunk::create_measurements() {
     }
   }
 
-  const double delta_frame{1'000'000'000.0 / set_.frame_rate_};
+  const double delta_frame{1'000'000'000.0 / frame_rate_};
 
   for (auto &&k : ints(0ul, data_.back().num_frames_)) {
     measurements_.push_back(data_.back().timestamp_ +
@@ -84,7 +82,7 @@ void SHUTChunk::write(rosbag2_cpp::Writer &writer) {
   }
 
   cv::Mat_<cv::Vec3b> img{};
-  cap_ >> img;
+  *cap_ >> img;
 
   if (img.empty()) {
     ++index_;
@@ -141,6 +139,30 @@ void SHUTChunk::write(rosbag2_cpp::Writer &writer) {
   ++index_;
 }
 
+void SHUTChunk::reset() {
+  index_ = 0;
+  measurements_.clear();
+  data_.clear();
+
+  if (cap_ and cap_->isOpened()) {
+    cap_->release();
+  }
+}
+
+void SHUTChunk::open_mp4(const std::string_view path_to_mp4) {
+
+  if (cap_ and cap_->isOpened()) {
+    cap_->release();
+  }
+
+  cap_ = std::make_unique<cv::VideoCapture>(path_to_mp4.data());
+
+  if (not cap_->isOpened()) {
+    throw std::runtime_error{
+        fmt::format("unable to open video: {}", path_to_mp4.data())};
+  }
+}
+
 void IMUChunk::add(const std::string_view fourcc_str, uint64_t timestamp,
                    std::span<const double> vec) {
 
@@ -180,14 +202,20 @@ void IMUChunk::create_measurements() {
   measurements_.reserve(total_num_accl);
 
   for (auto &&i : ints(0ul, accl_data_.size() - 1)) {
-    const int64_t delta{accl_data_[i + 1].timestamp_ -
-                        accl_data_[i].timestamp_};
 
-    if (accl_data_[i + 1].timestamp_ != gyro_data_[i + 1].timestamp_ or
-        accl_data_[i].timestamp_ != gyro_data_[i].timestamp_) {
-      throw std::runtime_error{
-          "accelerometer and gyroscope are not synchronized"};
-    }
+    const int64_t t0{(accl_data_[i].timestamp_ + gyro_data_[i].timestamp_) >>
+                     1};
+
+    const int64_t t1{
+        (accl_data_[i + 1].timestamp_ + gyro_data_[i + 1].timestamp_) >> 1};
+
+    const int64_t delta{t1 - t0};
+
+    // if (accl_data_[i + 1].timestamp_ != gyro_data_[i + 1].timestamp_ or
+    //     accl_data_[i].timestamp_ != gyro_data_[i].timestamp_) {
+    //   throw std::runtime_error{
+    //       "accelerometer and gyroscope are not synchronized"};
+    // }
 
     if (accl_data_[i].val_.size() != gyro_data_[i].val_.size()) {
       throw std::runtime_error{
@@ -210,7 +238,7 @@ void IMUChunk::create_measurements() {
     }
   }
 
-  const double delta_frame{1'000'000'000.0 / accl_rate_};
+  const double delta_frame{1'000'000'000.0 / frame_rate_};
 
   for (auto &&[k, imu_data] :
        enumerate(zip(accl_data_.back().val_, gyro_data_.back().val_))) {
@@ -254,6 +282,13 @@ void IMUChunk::write(rosbag2_cpp::Writer &writer) {
   ++index_;
 }
 
+void IMUChunk::reset() {
+  index_ = 0;
+  measurements_.clear();
+  accl_data_.clear();
+  gyro_data_.clear();
+}
+
 void GPS5Chunk::add(const std::string_view, uint64_t timestamp,
                     std::span<const double> vec) {
 
@@ -262,14 +297,15 @@ void GPS5Chunk::add(const std::string_view, uint64_t timestamp,
   const auto num_elements{vec.size() / num_components_};
 
   d.lla_.resize(num_elements);
-  d.vel_.resize(num_elements);
+  d.vel2d_.resize(num_elements);
+  d.vel3d_.resize(num_elements);
 
   for (auto &&i : ints(0ul, num_elements)) {
     d.lla_[i].x() = vec[i * num_components_];
     d.lla_[i].y() = vec[i * num_components_ + 1];
     d.lla_[i].z() = vec[i * num_components_ + 2];
-    d.vel_[i].x() = vec[i * num_components_ + 3];
-    d.vel_[i].y() = vec[i * num_components_ + 4];
+    d.vel2d_[i] = vec[i * num_components_ + 3];
+    d.vel3d_[i] = vec[i * num_components_ + 4];
   }
 
   data_.push_back(std::move(d));
@@ -287,28 +323,31 @@ void GPS5Chunk::create_measurements() {
     const double delta_frame{static_cast<double>(delta) /
                              static_cast<double>(d[0].lla_.size())};
 
-    for (auto &&[k, gps_data] : enumerate(zip(d[0].lla_, d[0].vel_))) {
-      auto &&[lla, vel] = gps_data;
+    for (auto &&[k, gps_data] :
+         enumerate(zip(d[0].lla_, d[0].vel2d_, d[0].vel3d_))) {
+      auto &&[lla, vel2d, vel3d] = gps_data;
 
       measurements_.push_back(
           Measurement{.timestamp_ = d[0].timestamp_ +
                                     static_cast<int64_t>(k * delta_frame + 0.5),
                       .lla_ = lla,
-                      .vel_ = vel});
+                      .vel2d_ = vel2d,
+                      .vel3d_ = vel3d});
     }
   }
 
   const double delta_frame{1'000'000'000.0 / frame_rate_};
 
-  for (auto &&[k, gps_data] :
-       enumerate(zip(data_.back().lla_, data_.back().vel_))) {
-    auto &&[lla, vel] = gps_data;
+  for (auto &&[k, gps_data] : enumerate(
+           zip(data_.back().lla_, data_.back().vel2d_, data_.back().vel3d_))) {
+    auto &&[lla, vel2d, vel3d] = gps_data;
 
     measurements_.push_back(
         Measurement{.timestamp_ = data_.back().timestamp_ +
                                   static_cast<int64_t>(k * delta_frame + 0.5),
                     .lla_ = lla,
-                    .vel_ = vel});
+                    .vel2d_ = vel2d,
+                    .vel3d_ = vel3d});
   }
 }
 
@@ -335,4 +374,10 @@ void GPS5Chunk::write(rosbag2_cpp::Writer &writer) {
 
   writer.write(gps_msg, "/fix", rclcpp::Time{measurements_[index_].timestamp_});
   ++index_;
+}
+
+void GPS5Chunk::reset() {
+  index_ = 0;
+  measurements_.clear();
+  data_.clear();
 }

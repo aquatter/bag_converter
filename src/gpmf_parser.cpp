@@ -18,6 +18,7 @@
 #include <queue>
 #include <range/v3/view/iota.hpp>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <progress_bar.hpp>
@@ -99,21 +100,20 @@ struct Payload {
   GPMF_stream metadata_stream_;
 };
 
-struct GPMFParser::impl {
-  impl(const GPMFParserSettings &set) : set_{set} {
-
-    mp4handle_ = OpenMP4Source(const_cast<char *>(set_.path_to_mp4_.data()),
+struct MP4Source {
+  MP4Source(const std::string_view path_to_mp4) {
+    mp4handle_ = OpenMP4Source(const_cast<char *>(path_to_mp4.data()),
                                MOV_GPMF_TRAK_TYPE, MOV_GPMF_TRAK_SUBTYPE, 0);
 
     if (mp4handle_ == 0) {
       throw std::runtime_error{
           fmt::format("error: {} is an invalid MP4/MOV or it has no GPMF data",
-                      set_.path_to_mp4_.data())};
+                      path_to_mp4.data())};
     }
 
     fmt::print("\e[38;2;154;205;50mSuccessfully opened file:\e[0m "
                "\e[38;2;255;127;80m{}\e[0m\n",
-               set_.path_to_mp4_.data());
+               path_to_mp4.data());
 
     uint32_t fr_num{0}, fr_dem{0};
 
@@ -136,38 +136,44 @@ struct GPMFParser::impl {
     cbobject.cbFreePayloadResource = FreePayloadResource;
     cbobject.cbGetEditListOffsetRationalTime = GetEditListOffsetRationalTime;
 
-    chunks_.emplace_back(std::make_unique<SHUTChunk>(SHUTChunkSettings{
-        .frame_rate_ =
-            GetGPMFSampleRate(cbobject, STR2FOURCC("SHUT"), STR2FOURCC("SHUT"),
-                              GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr),
-        .resize_ = 1.0,
-        .path_to_mp4_ = set_.path_to_mp4_,
-        .output_path_ = set_.output_path_,
-        .jpeg_quality_ = set_.jpeg_quality_,
-        .extract_images_ = set_.extract_images_,
-        .compress_ = set_.compress_,
+    data_frame_rate_["SHUT"] =
+        GetGPMFSampleRate(cbobject, STR2FOURCC("SHUT"), STR2FOURCC("SHUT"),
+                          GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr);
 
-    }));
-
-    chunks_.emplace_back(std::make_unique<GPS5Chunk>(
-        GetGPMFSampleRate(cbobject, STR2FOURCC("GPS5"), STR2FOURCC("SHUT"),
-                          GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr)));
-
-    chunks_.emplace_back(std::make_unique<IMUChunk>(
+    data_frame_rate_["ACCL"] =
         GetGPMFSampleRate(cbobject, STR2FOURCC("ACCL"), STR2FOURCC("SHUT"),
-                          GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr),
+                          GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr);
+
+    data_frame_rate_["GYRO"] =
         GetGPMFSampleRate(cbobject, STR2FOURCC("GYRO"), STR2FOURCC("SHUT"),
-                          GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr)));
+                          GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr);
+
+    data_frame_rate_["GPS5"] =
+        GetGPMFSampleRate(cbobject, STR2FOURCC("GPS5"), STR2FOURCC("SHUT"),
+                          GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr);
+
+    if (data_frame_rate_["ACCL"] != data_frame_rate_["GYRO"]) {
+      throw std::runtime_error{
+          "accelerometer and gyroscope rates are not the same"};
+    }
   }
 
-  void parse() {
+  double frame_rate(std::string fourcc) const {
+    if (data_frame_rate_.contains(fourcc)) {
+      return data_frame_rate_.at(fourcc);
+    }
+
+    return 0.0;
+  }
+
+  void parse(std::span<std::unique_ptr<GPMFChunkBase>> chunks) {
     const auto num_payloads{GetNumberPayloads(mp4handle_)};
 
     for (auto &&payload_index : ints(0u, num_payloads)) {
 
       Payload payload{mp4handle_, payload_index};
 
-      for (auto &&chunk : chunks_) {
+      for (auto &&chunk : chunks) {
 
         for (const auto four_cc : chunk->four_cc()) {
           payload.parse(*chunk, four_cc);
@@ -175,7 +181,7 @@ struct GPMFParser::impl {
       }
     }
 
-    for (auto &&chunk : chunks_) {
+    for (auto &&chunk : chunks) {
       chunk->create_measurements();
     }
 
@@ -183,9 +189,53 @@ struct GPMFParser::impl {
                "GPMF data successfully parsed\n");
   }
 
-  void write_bag() {
+  uint32_t num_frames() const noexcept { return num_frames_; }
 
-    fmt::print(fmt::fg(fmt::color::yellow_green), "Creating bag...\n");
+  ~MP4Source() { CloseSource(mp4handle_); }
+
+  size_t mp4handle_;
+  uint32_t num_frames_;
+  std::unordered_map<std::string, double> data_frame_rate_;
+};
+
+struct GPMFParser::impl {
+  impl(const GPMFParserSettings &set) : set_{set} {
+
+    chunks_.emplace_back(std::make_unique<SHUTChunk>(SHUTChunkSettings{
+        .resize_ = set_.resize_,
+        .output_path_ = set_.output_path_,
+        .jpeg_quality_ = set_.jpeg_quality_,
+        .extract_images_ = set_.extract_images_,
+        .compress_ = set_.compress_,
+
+    }));
+
+    chunks_.emplace_back(std::make_unique<GPS5Chunk>());
+    chunks_.emplace_back(std::make_unique<IMUChunk>());
+
+    rosbag2_storage::StorageOptions storage_options;
+    storage_options.uri = set_.output_path_;
+
+    writer_.open(storage_options);
+  }
+
+  void parse() {
+
+    for (auto &&path_to_mp4 : set_.paths_to_mp4_) {
+      MP4Source mp4{path_to_mp4};
+
+      for (auto &&chunk : chunks_) {
+        chunk->reset();
+        chunk->open_mp4(path_to_mp4);
+        chunk->set_frame_rate(mp4.frame_rate(chunk->four_cc()[0].data()));
+      }
+
+      mp4.parse(chunks_);
+      write_bag(mp4.num_frames());
+    }
+  }
+
+  void write_bag(size_t mum_frames) {
 
     using queue_type = std::pair<int64_t, GPMFChunkBase *>;
 
@@ -195,12 +245,6 @@ struct GPMFParser::impl {
                         })>
         q;
 
-    rosbag2_storage::StorageOptions storage_options;
-    storage_options.uri = set_.output_path_;
-
-    rosbag2_cpp::Writer writer;
-    writer.open(storage_options);
-
     for (auto &&chunk : chunks_) {
       if (chunk->timestamp().has_value()) {
         q.emplace(chunk->timestamp().value(), chunk.get());
@@ -208,7 +252,7 @@ struct GPMFParser::impl {
     }
 
     ProgressBar bar{
-        std::vector{ProgressBar::ProgressInfo{.message_count_ = num_frames_,
+        std::vector{ProgressBar::ProgressInfo{.message_count_ = mum_frames,
                                               .processed_count_ = 0,
                                               .topic_name_ = "frame",
                                               .ind_ = 0}}};
@@ -219,7 +263,7 @@ struct GPMFParser::impl {
       auto ptr{q.top().second};
       q.pop();
 
-      ptr->write(writer);
+      ptr->write(writer_);
       if (ptr->timestamp().has_value()) {
         q.emplace(ptr->timestamp().value(), ptr);
       }
@@ -232,18 +276,14 @@ struct GPMFParser::impl {
     bar.done();
   }
 
-  ~impl() { CloseSource(mp4handle_); }
-
   GPMFParserSettings set_;
-  size_t mp4handle_;
-  uint32_t num_frames_;
   std::vector<std::unique_ptr<GPMFChunkBase>> chunks_;
+  rosbag2_cpp::Writer writer_;
 };
 
 GPMFParser::GPMFParser(const GPMFParserSettings &set)
     : pimpl_{std::make_unique<impl>(set)} {}
 
 void GPMFParser::parse() { pimpl_->parse(); }
-void GPMFParser::write_bag() { pimpl_->write_bag(); }
 
 GPMFParser::~GPMFParser() = default;

@@ -48,18 +48,18 @@ void ProgressBar::advance(const std::string &topic, size_t how_much) {
   }
 
   if (progress == length_) {
-    fmt::print("\e[38;5;84m{:<{}}\e[0m [\e[38;5;69m{:-^{}}\e[0m] "
-               "{:>{}}/{:>{}} \e[38;5;208m100%\e[0m\n",
+    fmt::print("\e[38;2;154;205;50m{:<{}}\e[0m [\e[38;5;69m{:-^{}}\e[0m] "
+               "{:>{}}/{:>{}} \e[38;2;255;127;80m100%\e[0m\n",
                topic, max_name_size_, "-", length_, info.processed_count_,
                max_count_size_, info.message_count_, max_count_size_);
   } else if (progress == 0) {
-    fmt::print("\e[38;5;84m{:<{}}\e[0m [{:^{}}] "
-               "{:>{}}/{:>{}} \e[38;5;208m{:>3}%\e[0m\n",
+    fmt::print("\e[38;2;154;205;50m{:<{}}\e[0m [{:^{}}] "
+               "{:>{}}/{:>{}} \e[38;2;255;127;80m{:>3}%\e[0m\n",
                topic, max_name_size_, " ", length_, info.processed_count_,
                max_count_size_, info.message_count_, max_count_size_, percents);
   } else {
-    fmt::print("\e[38;5;84m{:<{}}\e[0m [\e[38;5;69m{:-^{}}\e[0m{:^{}}] "
-               "{:>{}}/{:>{}} \e[38;5;208m{:>3}%\e[0m\n",
+    fmt::print("\e[38;2;154;205;50m{:<{}}\e[0m [\e[38;5;69m{:-^{}}\e[0m{:^{}}] "
+               "{:>{}}/{:>{}} \e[38;2;255;127;80m{:>3}%\e[0m\n",
                topic, max_name_size_, "-", progress, " ", length_ - progress,
                info.processed_count_, max_count_size_, info.message_count_,
                max_count_size_, percents);

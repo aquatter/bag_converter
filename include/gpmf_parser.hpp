@@ -1,10 +1,10 @@
 #pragma once
 #include <memory>
-#include <string_view>
+#include <vector>
 
 struct GPMFParserSettings {
   double resize_;
-  std::string path_to_mp4_;
+  std::vector<std::string> paths_to_mp4_;
   std::string output_path_;
   int jpeg_quality_;
   bool extract_images_;
@@ -15,7 +15,6 @@ class GPMFParser {
 public:
   GPMFParser(const GPMFParserSettings &set);
   void parse();
-  void write_bag();
 
   ~GPMFParser();
 
