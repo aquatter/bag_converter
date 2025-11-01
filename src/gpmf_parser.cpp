@@ -148,8 +148,8 @@ struct MP4Source {
         GetGPMFSampleRate(cbobject, STR2FOURCC("GYRO"), STR2FOURCC("SHUT"),
                           GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr);
 
-    data_frame_rate_["GPS5"] =
-        GetGPMFSampleRate(cbobject, STR2FOURCC("GPS5"), STR2FOURCC("SHUT"),
+    data_frame_rate_["GPS9"] =
+        GetGPMFSampleRate(cbobject, STR2FOURCC("GPS9"), STR2FOURCC("SHUT"),
                           GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr);
 
     if (data_frame_rate_["ACCL"] != data_frame_rate_["GYRO"]) {

@@ -207,7 +207,7 @@ public:
     if (not(extract_images_ or extract_video_)) {
       rosbag2_storage::StorageOptions storage_options;
       storage_options.uri = set.output_bag_;
-      storage_options.max_bagfile_duration = 30;
+      // storage_options.max_bagfile_duration = 30;
 
       writer_.open(storage_options);
     }

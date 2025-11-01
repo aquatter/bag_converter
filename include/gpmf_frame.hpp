@@ -133,7 +133,7 @@ struct GPS5Chunk : GPMFChunkBase {
   void open_mp4(const std::string_view path_to_mp4) override {}
 
   static constexpr size_t num_components_{5};
-  static constexpr std::array<std::string_view, 1> fourcc_str_{"GPS5"};
+  static constexpr std::array<std::string_view, 1> fourcc_str_{"GPS9"};
   std::vector<Data> data_;
   std::vector<Measurement> measurements_;
 };
