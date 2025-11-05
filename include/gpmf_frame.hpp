@@ -91,7 +91,7 @@ struct SHUTChunk : GPMFChunkBase {
   std::vector<int64_t> measurements_;
 };
 
-struct GPS5Chunk : GPMFChunkBase {
+struct GPSChunk : GPMFChunkBase {
 
   struct Data {
     int64_t timestamp_;
@@ -132,7 +132,7 @@ struct GPS5Chunk : GPMFChunkBase {
 
   void open_mp4(const std::string_view path_to_mp4) override {}
 
-  static constexpr size_t num_components_{5};
+  static constexpr size_t num_components_{9};
   static constexpr std::array<std::string_view, 1> fourcc_str_{"GPS9"};
   std::vector<Data> data_;
   std::vector<Measurement> measurements_;

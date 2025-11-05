@@ -210,7 +210,7 @@ struct GPMFParser::impl {
 
     }));
 
-    chunks_.emplace_back(std::make_unique<GPS5Chunk>());
+    chunks_.emplace_back(std::make_unique<GPSChunk>());
     chunks_.emplace_back(std::make_unique<IMUChunk>());
 
     rosbag2_storage::StorageOptions storage_options;

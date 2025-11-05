@@ -289,8 +289,8 @@ void IMUChunk::reset() {
   gyro_data_.clear();
 }
 
-void GPS5Chunk::add(const std::string_view, uint64_t timestamp,
-                    std::span<const double> vec) {
+void GPSChunk::add(const std::string_view, uint64_t timestamp,
+                   std::span<const double> vec) {
 
   Data d{};
   d.timestamp_ = timestamp * 1'000;
@@ -311,7 +311,7 @@ void GPS5Chunk::add(const std::string_view, uint64_t timestamp,
   data_.push_back(std::move(d));
 }
 
-void GPS5Chunk::create_measurements() {
+void GPSChunk::create_measurements() {
 
   const auto total_num{ranges::accumulate(
       data_ | transform([](const Data &d) { return d.lla_.size(); }), 0ul)};
@@ -351,7 +351,7 @@ void GPS5Chunk::create_measurements() {
   }
 }
 
-void GPS5Chunk::write(rosbag2_cpp::Writer &writer) {
+void GPSChunk::write(rosbag2_cpp::Writer &writer) {
 
   if (index_ >= measurements_.size()) {
     return;
@@ -376,7 +376,7 @@ void GPS5Chunk::write(rosbag2_cpp::Writer &writer) {
   ++index_;
 }
 
-void GPS5Chunk::reset() {
+void GPSChunk::reset() {
   index_ = 0;
   measurements_.clear();
   data_.clear();

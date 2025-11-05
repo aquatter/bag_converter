@@ -1,4 +1,3 @@
-#include "sensor_msgs/msg/compressed_image.hpp"
 #include <CLI/CLI.hpp>
 #include <GeographicLib/LocalCartesian.hpp>
 #include <cstddef>
