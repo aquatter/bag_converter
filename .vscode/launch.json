@@ -11,12 +11,11 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-i",
-                "~/data/academ_16_10/academ_wide_stab_off_0.MP4",
+                "~/data/academicheskaya/academ_11_11/GX010011.MP4",
                 "-o",
-                "~/data/academ_16_10/test/",
+                "~/data/academicheskaya/academ_11_11/GX010011",
                 "--compressed",
-                "-r",
-                "0.1"
+                "--no-images",
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

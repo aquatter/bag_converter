@@ -36,6 +36,9 @@ int main(int argc, char const *const *argv) {
         ->check(CLI::Range{0, 100})
         ->default_val(70);
 
+    app.add_flag("--no-images", set.no_images_, "Don't extract images")
+        ->default_val(false);
+
     CLI11_PARSE(app, argc, argv);
 
     if (std::filesystem::exists(set.output_path_)) {

@@ -14,6 +14,7 @@ public:
 
   ProgressBar(std::span<const ProgressInfo> topics);
   void advance(const std::string &topic, size_t how_much = 1);
+  void progress(const std::string &topic, size_t progress);
   void done();
   void draw();
 

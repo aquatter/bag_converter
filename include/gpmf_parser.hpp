@@ -9,6 +9,7 @@ struct GPMFParserSettings {
   int jpeg_quality_;
   bool extract_images_;
   bool compress_;
+  bool no_images_;
 };
 
 class GPMFParser {

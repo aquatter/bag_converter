@@ -12,7 +12,9 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 #include <range/v3/numeric/accumulate.hpp>
+#include <range/v3/range/conversion.hpp>
 #include <range/v3/view/enumerate.hpp>
+#include <range/v3/view/filter.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/sliding.hpp>
 #include <range/v3/view/transform.hpp>
@@ -22,8 +24,11 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <stdexcept>
+#include <vector>
 
+using ranges::to;
 using ranges::views::enumerate;
+using ranges::views::filter;
 using ranges::views::ints;
 using ranges::views::sliding;
 using ranges::views::transform;
@@ -185,72 +190,111 @@ void IMUChunk::add(const std::string_view fourcc_str, uint64_t timestamp,
   }
 }
 
-void IMUChunk::create_measurements() {
-  const auto total_num_accl{ranges::accumulate(
-      accl_data_ | transform([](const Data &d) { return d.val_.size(); }),
-      0ul)};
+std::vector<IMUChunk::Measurement>
+IMUChunk::create_measurements(const std::string_view four_cc) const {
 
-  const auto total_num_gyro{ranges::accumulate(
-      gyro_data_ | transform([](const Data &d) { return d.val_.size(); }),
-      0ul)};
+  const auto &data{four_cc == "ACCL" ? accl_data_ : gyro_data_};
 
-  if (total_num_accl != total_num_gyro) {
-    throw std::runtime_error{
-        "accelerometer and gyroscope are not synchronized"};
-  }
+  const auto total_num{ranges::accumulate(
+      data | transform([](const Data &d) { return d.val_.size(); }), 0ul)};
 
-  measurements_.reserve(total_num_accl);
+  std::vector<Measurement> measurements{};
+  measurements.reserve(total_num);
 
-  for (auto &&i : ints(0ul, accl_data_.size() - 1)) {
+  for (auto &&i : ints(0ul, data.size() - 1)) {
 
-    const int64_t t0{(accl_data_[i].timestamp_ + gyro_data_[i].timestamp_) >>
-                     1};
-
-    const int64_t t1{
-        (accl_data_[i + 1].timestamp_ + gyro_data_[i + 1].timestamp_) >> 1};
-
-    const int64_t delta{t1 - t0};
-
-    // if (accl_data_[i + 1].timestamp_ != gyro_data_[i + 1].timestamp_ or
-    //     accl_data_[i].timestamp_ != gyro_data_[i].timestamp_) {
-    //   throw std::runtime_error{
-    //       "accelerometer and gyroscope are not synchronized"};
-    // }
-
-    if (accl_data_[i].val_.size() != gyro_data_[i].val_.size()) {
-      throw std::runtime_error{
-          "different data size in the accelerometer and gyroscope"};
-    }
+    const int64_t delta{data[i + 1].timestamp_ - data[i].timestamp_};
 
     const double delta_frame{static_cast<double>(delta) /
-                             static_cast<double>(accl_data_[i].val_.size())};
+                             static_cast<double>(data[i].val_.size())};
 
-    for (auto &&[k, imu_data] :
-         enumerate(zip(accl_data_[i].val_, gyro_data_[i].val_))) {
+    for (auto &&[k, val] : enumerate(data[i].val_)) {
 
-      auto &&[accl, gyro] = imu_data;
-
-      measurements_.push_back(
-          Measurement{.timestamp_ = accl_data_[i].timestamp_ +
-                                    static_cast<int64_t>(k * delta_frame + 0.5),
-                      .accl_ = accl,
-                      .gyro_ = gyro});
+      measurements.push_back(Measurement{
+          .timestamp_ =
+              data[i].timestamp_ + static_cast<int64_t>(k * delta_frame + 0.5),
+          .accl_ = (four_cc == "ACCL" ? val : Eigen::Vector3d::Zero()),
+          .gyro_ = (four_cc == "GYRO" ? val : Eigen::Vector3d::Zero())});
     }
   }
 
   const double delta_frame{1'000'000'000.0 / frame_rate_};
 
-  for (auto &&[k, imu_data] :
-       enumerate(zip(accl_data_.back().val_, gyro_data_.back().val_))) {
-
-    auto &&[accl, gyro] = imu_data;
-
-    measurements_.push_back(
-        Measurement{.timestamp_ = accl_data_.back().timestamp_ +
-                                  static_cast<int64_t>(k * delta_frame + 0.5),
-                    .accl_ = accl,
-                    .gyro_ = gyro});
+  for (auto &&[k, val] : enumerate(data.back().val_)) {
+    measurements.push_back(Measurement{
+        .timestamp_ = data.back().timestamp_ +
+                      static_cast<int64_t>(k * delta_frame + 0.5),
+        .accl_ = (four_cc == "ACCL" ? val : Eigen::Vector3d::Zero()),
+        .gyro_ = (four_cc == "GYRO" ? val : Eigen::Vector3d::Zero())});
   }
+
+  return measurements;
+}
+
+void IMUChunk::create_measurements() {
+
+  auto accl_measurements{create_measurements("ACCL")};
+  auto gyro_measurements{create_measurements("GYRO")};
+
+  std::vector<uint8_t> valid_measurements{};
+  valid_measurements.resize(gyro_measurements.size(), 0);
+
+  size_t accl_ind{0};
+  size_t gyro_ind{0};
+
+  while (accl_ind < accl_measurements.size() and
+         gyro_ind < gyro_measurements.size()) {
+
+    while (gyro_ind < gyro_measurements.size() and
+           gyro_measurements[gyro_ind].timestamp_ <
+               accl_measurements[accl_ind].timestamp_) {
+      ++gyro_ind;
+    }
+
+    if (gyro_ind == gyro_measurements.size()) {
+      break;
+    }
+
+    while (accl_ind < accl_measurements.size() and
+           accl_measurements[accl_ind].timestamp_ <=
+               gyro_measurements[gyro_ind].timestamp_) {
+      ++accl_ind;
+    }
+
+    if (accl_ind == accl_measurements.size()) {
+      break;
+    }
+
+    if (accl_ind > 0) {
+      if (accl_measurements[accl_ind - 1].timestamp_ ==
+          gyro_measurements[gyro_ind].timestamp_) {
+
+        gyro_measurements[gyro_ind].accl_ =
+            accl_measurements[accl_ind - 1].accl_;
+
+        valid_measurements[gyro_ind] = 1;
+        continue;
+      }
+
+      const auto t{
+          static_cast<double>(gyro_measurements[gyro_ind].timestamp_ -
+                              accl_measurements[accl_ind - 1].timestamp_) /
+          static_cast<double>(accl_measurements[accl_ind].timestamp_ -
+                              accl_measurements[accl_ind - 1].timestamp_)};
+
+      gyro_measurements[gyro_ind].accl_ =
+          accl_measurements[accl_ind - 1].accl_ * (1.0 - t) +
+          accl_measurements[accl_ind].accl_ * t;
+
+      valid_measurements[gyro_ind] = 1;
+    }
+  }
+
+  measurements_ =
+      zip(gyro_measurements, valid_measurements) |
+      filter([](const auto &val) { return std::get<1>(val) == 1; }) |
+      transform([](const auto &val) { return std::get<0>(val); }) |
+      to<std::vector>();
 }
 
 void IMUChunk::write(rosbag2_cpp::Writer &writer) {

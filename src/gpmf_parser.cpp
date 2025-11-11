@@ -8,6 +8,7 @@
 #include <GPMF_parser.h>
 #include <GPMF_utils.h>
 #include <gpmf_parser.hpp>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 // clang-format on
@@ -201,14 +202,16 @@ struct MP4Source {
 struct GPMFParser::impl {
   impl(const GPMFParserSettings &set) : set_{set} {
 
-    chunks_.emplace_back(std::make_unique<SHUTChunk>(SHUTChunkSettings{
-        .resize_ = set_.resize_,
-        .output_path_ = set_.output_path_,
-        .jpeg_quality_ = set_.jpeg_quality_,
-        .extract_images_ = set_.extract_images_,
-        .compress_ = set_.compress_,
+    if (not set_.no_images_) {
+      chunks_.emplace_back(std::make_unique<SHUTChunk>(SHUTChunkSettings{
+          .resize_ = set_.resize_,
+          .output_path_ = set_.output_path_,
+          .jpeg_quality_ = set_.jpeg_quality_,
+          .extract_images_ = set_.extract_images_,
+          .compress_ = set_.compress_,
 
-    }));
+      }));
+    }
 
     chunks_.emplace_back(std::make_unique<GPSChunk>());
     chunks_.emplace_back(std::make_unique<IMUChunk>());
@@ -245,31 +248,51 @@ struct GPMFParser::impl {
                         })>
         q;
 
+    int64_t min_timestamp{std::numeric_limits<int64_t>::max()};
+    int64_t max_timestamp{std::numeric_limits<int64_t>::min()};
+
     for (auto &&chunk : chunks_) {
       if (chunk->timestamp().has_value()) {
         q.emplace(chunk->timestamp().value(), chunk.get());
       }
+
+      const auto [min_stamp, max_stamp] = chunk->timestamp_range();
+
+      min_timestamp = std::min(min_timestamp, min_stamp);
+      max_timestamp = std::max(max_timestamp, max_stamp);
     }
 
-    ProgressBar bar{
-        std::vector{ProgressBar::ProgressInfo{.message_count_ = mum_frames,
-                                              .processed_count_ = 0,
-                                              .topic_name_ = "frame",
-                                              .ind_ = 0}}};
+    ProgressBar bar{std::vector{ProgressBar::ProgressInfo{
+        .message_count_ = static_cast<size_t>(
+            1.0e-9 * static_cast<double>(max_timestamp - min_timestamp + 1) +
+            0.5),
+        .processed_count_ = 0,
+        .topic_name_ = "sec",
+        .ind_ = 0}}};
 
     bar.draw();
+
+    int64_t curr_timestamp{min_timestamp};
 
     while (not q.empty()) {
       auto ptr{q.top().second};
       q.pop();
 
       ptr->write(writer_);
+
       if (ptr->timestamp().has_value()) {
         q.emplace(ptr->timestamp().value(), ptr);
-      }
 
-      if (ptr->whoami() == ChunkType::Camera) {
-        bar.advance("frame");
+        const int64_t timestamp_diff{ptr->timestamp().value() - curr_timestamp};
+
+        if (timestamp_diff >= 1'000'000'000) {
+          bar.progress(
+              "sec", static_cast<size_t>(
+                         1.0e-9 * static_cast<double>(ptr->timestamp().value() -
+                                                      min_timestamp + 1) +
+                         0.5));
+          curr_timestamp = ptr->timestamp().value();
+        }
       }
     }
 

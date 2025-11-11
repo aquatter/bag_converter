@@ -26,6 +26,7 @@ struct GPMFChunkBase {
   virtual ~GPMFChunkBase() = default;
 
   virtual std::optional<int64_t> timestamp() = 0;
+  virtual std::pair<int64_t, int64_t> timestamp_range() const = 0;
   virtual void write(rosbag2_cpp::Writer &writer) = 0;
 
   virtual void reset() = 0;
@@ -72,6 +73,10 @@ struct SHUTChunk : GPMFChunkBase {
     }
 
     return std::nullopt;
+  }
+
+  std::pair<int64_t, int64_t> timestamp_range() const override {
+    return {measurements_.front(), measurements_.back()};
   }
 
   void write(rosbag2_cpp::Writer &writer) override;
@@ -132,6 +137,10 @@ struct GPSChunk : GPMFChunkBase {
 
   void open_mp4(const std::string_view path_to_mp4) override {}
 
+  std::pair<int64_t, int64_t> timestamp_range() const override {
+    return {measurements_.front().timestamp_, measurements_.back().timestamp_};
+  }
+
   static constexpr size_t num_components_{9};
   static constexpr std::array<std::string_view, 1> fourcc_str_{"GPS9"};
   std::vector<Data> data_;
@@ -162,6 +171,9 @@ struct IMUChunk : GPMFChunkBase {
 
   void create_measurements() override;
 
+  std::vector<Measurement>
+  create_measurements(const std::string_view four_cc) const;
+
   std::optional<int64_t> timestamp() override {
     if (index_ < measurements_.size()) {
       return measurements_[index_].timestamp_;
@@ -175,6 +187,10 @@ struct IMUChunk : GPMFChunkBase {
   void reset() override;
 
   void open_mp4(const std::string_view path_to_mp4) override {}
+
+  std::pair<int64_t, int64_t> timestamp_range() const override {
+    return {measurements_.front().timestamp_, measurements_.back().timestamp_};
+  }
 
   static constexpr size_t num_components_{3};
   static constexpr std::array<std::string_view, 2> fourcc_str_{"ACCL", "GYRO"};

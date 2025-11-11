@@ -18,6 +18,17 @@ ProgressBar::ProgressBar(std::span<const ProgressInfo> topics)
   }
 }
 
+void ProgressBar::progress(const std::string &topic, size_t progress) {
+  if (not topic_name_to_ind_.contains(topic)) {
+    return;
+  }
+
+  auto &info{info_[topic_name_to_ind_[topic]]};
+  info.processed_count_ = progress;
+
+  advance(topic, 0);
+}
+
 void ProgressBar::advance(const std::string &topic, size_t how_much) {
 
   if (not topic_name_to_ind_.contains(topic)) {
