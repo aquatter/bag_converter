@@ -95,3 +95,40 @@ set_target_properties(gopro_to_bag PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
 )
+
+add_library(gpmf-extractor STATIC
+    src/progress_bar.cpp
+    src/gpmf_parser.cpp
+    src/gpmf_frame.cpp
+    gpmf-parser/demo/GPMF_mp4reader.c
+    gpmf-parser/demo/GPMF_print.c
+    gpmf-parser/GPMF_parser.c
+    gpmf-parser/GPMF_utils.c
+)
+
+target_include_directories(gpmf-extractor PRIVATE
+    include
+    gpmf-parser
+    gpmf-parser/demo
+)
+
+target_link_libraries(gpmf-extractor
+    ${OpenCV_LIBS}
+    fmt::fmt
+    rcl::rcl
+    rosbag2_cpp::rosbag2_cpp
+    rosbag2_transport::rosbag2_transport
+    sensor_msgs::sensor_msgs_library
+    CLI11
+    Eigen3::Eigen
+    ${GeographicLib_LIBRARIES}
+    tinyxml2::tinyxml2
+    range-v3::range-v3
+    range-v3::meta
+    range-v3::concepts
+)
+
+set_target_properties(gpmf-extractor PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED YES
+)

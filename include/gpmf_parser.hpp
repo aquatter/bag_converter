@@ -1,5 +1,6 @@
 #pragma once
 #include <memory>
+#include <string>
 #include <vector>
 
 struct GPMFParserSettings {
@@ -16,6 +17,7 @@ class GPMFParser {
 public:
   GPMFParser(const GPMFParserSettings &set);
   void parse();
+  void write_bag(const std::string_view path) const;
 
   ~GPMFParser();
 

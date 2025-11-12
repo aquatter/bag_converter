@@ -215,11 +215,6 @@ struct GPMFParser::impl {
 
     chunks_.emplace_back(std::make_unique<GPSChunk>());
     chunks_.emplace_back(std::make_unique<IMUChunk>());
-
-    rosbag2_storage::StorageOptions storage_options;
-    storage_options.uri = set_.output_path_;
-
-    writer_.open(storage_options);
   }
 
   void parse() {
@@ -234,11 +229,16 @@ struct GPMFParser::impl {
       }
 
       mp4.parse(chunks_);
-      write_bag(mp4.num_frames());
     }
   }
 
-  void write_bag(size_t mum_frames) {
+  void write_bag(const std::string_view path) const {
+
+    rosbag2_cpp::Writer writer{};
+    rosbag2_storage::StorageOptions storage_options;
+    storage_options.uri = path.data();
+
+    writer.open(storage_options);
 
     using queue_type = std::pair<int64_t, GPMFChunkBase *>;
 
@@ -278,7 +278,7 @@ struct GPMFParser::impl {
       auto ptr{q.top().second};
       q.pop();
 
-      ptr->write(writer_);
+      ptr->write(writer);
 
       if (ptr->timestamp().has_value()) {
         q.emplace(ptr->timestamp().value(), ptr);
@@ -301,12 +301,15 @@ struct GPMFParser::impl {
 
   GPMFParserSettings set_;
   std::vector<std::unique_ptr<GPMFChunkBase>> chunks_;
-  rosbag2_cpp::Writer writer_;
 };
 
 GPMFParser::GPMFParser(const GPMFParserSettings &set)
     : pimpl_{std::make_unique<impl>(set)} {}
 
 void GPMFParser::parse() { pimpl_->parse(); }
+
+void GPMFParser::write_bag(const std::string_view path) const {
+  pimpl_->write_bag(path);
+}
 
 GPMFParser::~GPMFParser() = default;

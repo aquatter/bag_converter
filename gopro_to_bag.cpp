@@ -1,4 +1,3 @@
-#include "CLI/CLI.hpp"
 #include <CLI/CLI.hpp>
 #include <cstdlib>
 #include <exception>
@@ -59,6 +58,7 @@ int main(int argc, char const *const *argv) {
 
     GPMFParser gpmf_parser{set};
     gpmf_parser.parse();
+    gpmf_parser.write_bag(set.output_path_);
 
   } catch (const std::exception &ex) {
     fmt::print(fmt::fg(fmt::color::red), "{}\n", ex.what());
