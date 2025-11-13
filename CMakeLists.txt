@@ -106,7 +106,7 @@ add_library(gpmf-extractor STATIC
     gpmf-parser/GPMF_utils.c
 )
 
-target_include_directories(gpmf-extractor PRIVATE
+target_include_directories(gpmf-extractor PUBLIC
     include
     gpmf-parser
     gpmf-parser/demo
