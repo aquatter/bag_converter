@@ -47,13 +47,22 @@ void SHUTChunk::add(const std::string_view, uint64_t timestamp,
   data_.emplace_back(timestamp * 1'000, vec.size());
 }
 
+void SHUTChunk::increment() {
+
+  if (index_ < num_frames_) {
+    cv::Mat_<cv::Vec3b> img{};
+    *cap_ >> img;
+  }
+
+  ++index_;
+}
+
 void SHUTChunk::create_measurements() {
 
   const auto total_num{ranges::accumulate(
       data_ | transform([](const Data &d) { return d.num_frames_; }), 0ul)};
 
-  const auto num_frames{
-      static_cast<uint64_t>(cap_->get(cv::CAP_PROP_FRAME_COUNT))};
+  num_frames_ = static_cast<size_t>(cap_->get(cv::CAP_PROP_FRAME_COUNT));
 
   // if (total_num != num_frames) {
   //   throw std::runtime_error{
@@ -87,7 +96,10 @@ void SHUTChunk::write(rosbag2_cpp::Writer &writer) {
   }
 
   cv::Mat_<cv::Vec3b> img{};
-  *cap_ >> img;
+
+  if (index_ < num_frames_) {
+    *cap_ >> img;
+  }
 
   if (img.empty()) {
     ++index_;

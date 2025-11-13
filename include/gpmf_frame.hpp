@@ -35,6 +35,8 @@ struct GPMFChunkBase {
 
   virtual void open_mp4(const std::string_view path_to_mp4) = 0;
 
+  virtual void increment() { ++index_; };
+
   double frame_rate_;
   size_t index_{0};
 };
@@ -81,6 +83,8 @@ struct SHUTChunk : GPMFChunkBase {
 
   void write(rosbag2_cpp::Writer &writer) override;
 
+  void increment() override;
+
   void reset() override;
 
   void open_mp4(const std::string_view path_to_mp4) override;
@@ -94,6 +98,7 @@ struct SHUTChunk : GPMFChunkBase {
   std::unique_ptr<cv::VideoCapture> cap_;
 
   std::vector<int64_t> measurements_;
+  size_t num_frames_;
 };
 
 struct GPSChunk : GPMFChunkBase {

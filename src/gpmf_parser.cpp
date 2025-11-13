@@ -16,18 +16,17 @@
 #include <fmt/color.h>
 #include <fmt/format.h>
 #include <gpmf_frame.hpp>
+#include <progress_bar.hpp>
 #include <queue>
 #include <range/v3/view/iota.hpp>
-#include <string_view>
-#include <unordered_map>
-#include <vector>
-
-#include <progress_bar.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 using ranges::views::ints;
 
@@ -215,6 +214,12 @@ struct GPMFParser::impl {
 
     chunks_.emplace_back(std::make_unique<GPSChunk>());
     chunks_.emplace_back(std::make_unique<IMUChunk>());
+
+    start_time_ = 1'000'000'000l * set_.start_time_;
+    end_time_ = 1'000'000'000l * set_.end_time_;
+
+    start_time_ = start_time_ < 0 ? 0 : start_time_;
+    end_time_ = end_time_ < 0 ? std::numeric_limits<int64_t>::max() : end_time_;
   }
 
   void parse() {
@@ -278,7 +283,13 @@ struct GPMFParser::impl {
       auto ptr{q.top().second};
       q.pop();
 
-      ptr->write(writer);
+      if (ptr->timestamp().value() < start_time_) {
+        ptr->increment();
+      } else if (ptr->timestamp().value() > end_time_) {
+        continue;
+      } else {
+        ptr->write(writer);
+      }
 
       if (ptr->timestamp().has_value()) {
         q.emplace(ptr->timestamp().value(), ptr);
@@ -301,6 +312,8 @@ struct GPMFParser::impl {
 
   GPMFParserSettings set_;
   std::vector<std::unique_ptr<GPMFChunkBase>> chunks_;
+  int64_t start_time_;
+  int64_t end_time_;
 };
 
 GPMFParser::GPMFParser(const GPMFParserSettings &set)

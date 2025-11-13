@@ -11,6 +11,8 @@ struct GPMFParserSettings {
   bool extract_images_;
   bool compress_;
   bool no_images_;
+  int64_t start_time_;
+  int64_t end_time_;
 };
 
 class GPMFParser {

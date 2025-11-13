@@ -38,6 +38,12 @@ int main(int argc, char const *const *argv) {
     app.add_flag("--no-images", set.no_images_, "Don't extract images")
         ->default_val(false);
 
+    app.add_option("--start", set.start_time_, "Start time to process, s")
+        ->default_val(-1);
+
+    app.add_option("--end", set.end_time_, "End time to process, s")
+        ->default_val(-1);
+
     CLI11_PARSE(app, argc, argv);
 
     if (std::filesystem::exists(set.output_path_)) {
