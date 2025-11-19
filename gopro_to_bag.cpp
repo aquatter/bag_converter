@@ -1,6 +1,7 @@
 #include <CLI/CLI.hpp>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <fmt/color.h>
 #include <fmt/format.h>
 #include <gpmf_parser.hpp>
@@ -18,8 +19,7 @@ int main(int argc, char const *const *argv) {
         ->check(CLI::ExistingFile);
 
     app.add_option("-o, --output", set.output_path_,
-                   "Specify output ros2 bag path")
-        ->required();
+                   "Specify output ros2 bag path");
 
     app.add_option("-r, --resize", set.resize_, "Resize factor")
         ->check(CLI::Range{0.0, 1.0})
@@ -44,7 +44,25 @@ int main(int argc, char const *const *argv) {
     app.add_option("--end", set.end_time_, "End time to process, s")
         ->default_val(-1);
 
+    app.add_flag("--geo", set.save_geojson_,
+                 "Save GPS track to geojson and gpx")
+        ->default_val(false);
+
     CLI11_PARSE(app, argc, argv);
+
+    if (set.output_path_.empty()) {
+      set.output_path_ = std::filesystem::path{set.paths_to_mp4_.front()}
+                             .replace_extension("")
+                             .string() +
+                         "/";
+    }
+
+    if (std::filesystem::path{set.output_path_}.has_extension()) {
+      set.output_path_ = std::filesystem::path{set.output_path_}
+                             .replace_extension("")
+                             .string() +
+                         "/";
+    }
 
     if (std::filesystem::exists(set.output_path_)) {
       fmt::print("\e[38;2;154;205;50mPath\e[0m \e[38;2;255;127;80m'{}'\e[0m "
@@ -64,7 +82,6 @@ int main(int argc, char const *const *argv) {
 
     GPMFParser gpmf_parser{set};
     gpmf_parser.parse();
-    gpmf_parser.write_bag(set.output_path_);
 
   } catch (const std::exception &ex) {
     fmt::print(fmt::fg(fmt::color::red), "{}\n", ex.what());

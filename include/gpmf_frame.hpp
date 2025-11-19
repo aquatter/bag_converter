@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <opencv2/videoio.hpp>
 #include <optional>
@@ -36,6 +37,8 @@ struct GPMFChunkBase {
   virtual void open_mp4(const std::string_view path_to_mp4) = 0;
 
   virtual void increment() { ++index_; };
+
+  void visit(std::function<void(const GPMFChunkBase *)> f) const { f(this); }
 
   double frame_rate_;
   size_t index_{0};

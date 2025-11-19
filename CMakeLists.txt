@@ -12,6 +12,7 @@ find_package(GeographicLib REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(tinyxml2 REQUIRED)
 find_package(range-v3 REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 add_subdirectory(CLI11)
 
@@ -88,7 +89,11 @@ target_link_libraries(gopro_to_bag
     Eigen3::Eigen
     ${GeographicLib_LIBRARIES}
     tinyxml2::tinyxml2
-    range-v3::range-v3 range-v3::meta range-v3::concepts
+    range-v3::range-v3
+    range-v3::meta
+    range-v3::concepts
+    nlohmann_json::nlohmann_json
+    tinyxml2::tinyxml2
 )
 
 set_target_properties(gopro_to_bag PROPERTIES
@@ -126,6 +131,8 @@ target_link_libraries(gpmf-extractor
     range-v3::range-v3
     range-v3::meta
     range-v3::concepts
+    nlohmann_json::nlohmann_json
+    tinyxml2::tinyxml2
 )
 
 set_target_properties(gpmf-extractor PROPERTIES

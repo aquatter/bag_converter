@@ -7,28 +7,38 @@
 #include <GPMF_mp4reader.h>
 #include <GPMF_parser.h>
 #include <GPMF_utils.h>
+#include <ctime>
+#include <filesystem>
 #include <gpmf_parser.hpp>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 // clang-format on
 
+#include <chrono>
+#include <fmt/chrono.h>
 #include <fmt/color.h>
 #include <fmt/format.h>
+#include <fstream>
 #include <gpmf_frame.hpp>
+#include <nlohmann/json.hpp>
 #include <progress_bar.hpp>
 #include <queue>
+#include <range/v3/action/push_back.hpp>
 #include <range/v3/view/iota.hpp>
+#include <range/v3/view/transform.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <string_view>
+#include <tinyxml2.h>
 #include <unordered_map>
 #include <vector>
 
 using ranges::views::ints;
+using ranges::views::transform;
 
 struct Payload {
   Payload(size_t mp4handle, uint32_t payload_index) : mp4handle_{mp4handle} {
@@ -201,6 +211,10 @@ struct MP4Source {
 struct GPMFParser::impl {
   impl(const GPMFParserSettings &set) : set_{set} {
 
+    rosbag2_storage::StorageOptions storage_options;
+    storage_options.uri = set_.output_path_;
+    writer_.open(storage_options);
+
     if (not set_.no_images_) {
       chunks_.emplace_back(std::make_unique<SHUTChunk>(SHUTChunkSettings{
           .resize_ = set_.resize_,
@@ -234,16 +248,32 @@ struct GPMFParser::impl {
       }
 
       mp4.parse(chunks_);
+
+      if (set_.save_geojson_) {
+
+        for (auto &&chunk : chunks_) {
+          chunk->visit([this](const GPMFChunkBase *chunk) {
+            if (chunk->whoami() != ChunkType::GPS) {
+              return;
+            }
+
+            const auto &m{static_cast<const GPSChunk *>(chunk)->measurements_};
+
+            lla_ = std::move(lla_) |
+                   ranges::actions::push_back(
+                       m | transform([](auto &&val) { return val.lla_; }));
+          });
+        }
+      }
+
+      write_bag();
     }
+
+    write_geojson();
+    write_gpx();
   }
 
-  void write_bag(const std::string_view path) const {
-
-    rosbag2_cpp::Writer writer{};
-    rosbag2_storage::StorageOptions storage_options;
-    storage_options.uri = path.data();
-
-    writer.open(storage_options);
+  void write_bag() {
 
     using queue_type = std::pair<int64_t, GPMFChunkBase *>;
 
@@ -288,7 +318,7 @@ struct GPMFParser::impl {
       } else if (ptr->timestamp().value() > end_time_) {
         continue;
       } else {
-        ptr->write(writer);
+        ptr->write(writer_);
       }
 
       if (ptr->timestamp().has_value()) {
@@ -310,19 +340,107 @@ struct GPMFParser::impl {
     bar.done();
   }
 
+  void write_gpx() {
+    if (not set_.save_geojson_) {
+      return;
+    }
+
+    tinyxml2::XMLDocument doc{};
+
+    auto decl{doc.NewDeclaration(
+        "xml version='1.0' encoding='UTF-8' standalone='no'")};
+
+    doc.InsertFirstChild(decl);
+    auto gpx{doc.NewElement("gpx")};
+    doc.InsertEndChild(gpx);
+
+    auto trk{doc.NewElement("trk")};
+    gpx->InsertEndChild(trk);
+
+    auto trkseg{doc.NewElement("trkseg")};
+    trk->InsertEndChild(trkseg);
+
+    gpx->SetAttribute("xmlns", "http://www.topografix.com/GPX/1/1");
+    gpx->SetAttribute("creator", "lomakin");
+    gpx->SetAttribute("version", "1.1");
+    gpx->SetAttribute("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance");
+    gpx->SetAttribute("xsi:schemaLocation",
+                      "http://www.topografix.com/GPX/1/1 "
+                      "http://www.topografix.com/GPX/1/1/gpx.xsd");
+
+    auto name{doc.NewElement("name")};
+    name->SetText(std::filesystem::path{
+        set_.output_path_.substr(0, set_.output_path_.size() - 1)}
+                      .filename()
+                      .string()
+                      .c_str());
+
+    trk->InsertEndChild(name);
+
+    for (auto &&gps : lla_) {
+      auto trkpt{doc.NewElement("trkpt")};
+      trkpt->SetAttribute("lat", gps.x());
+      trkpt->SetAttribute("lon", gps.y());
+
+      auto time{doc.NewElement("time")};
+
+      time->SetText(
+          fmt::format("{:%Y-%m-%dT%H:%M:%S}Z", std::chrono::system_clock::now())
+              .c_str());
+
+      trkpt->InsertEndChild(time);
+      trkseg->InsertEndChild(trkpt);
+    }
+
+    doc.SaveFile(std::filesystem::path{
+        set_.output_path_.substr(0, set_.output_path_.size() - 1)}
+                     .replace_extension(".gpx")
+                     .string()
+                     .c_str());
+  }
+
+  void write_geojson() {
+    if (not set_.save_geojson_) {
+      return;
+    }
+
+    nlohmann::json j{};
+    j["type"] = "FeatureCollection";
+    j["name"] = std::filesystem::path{set_.output_path_.substr(
+                                          0, set_.output_path_.size() - 1)}
+                    .filename()
+                    .string();
+
+    nlohmann::json gps_track{};
+    gps_track["type"] = "Feature";
+    gps_track["geometry"]["type"] = "LineString";
+    gps_track["properties"]["description"] = "GPS track";
+    gps_track["properties"]["marker-color"] = "#43ed54ff";
+
+    for (auto &&gps : lla_) {
+      gps_track["geometry"]["coordinates"].push_back({gps.y(), gps.x()});
+    }
+
+    j["features"].push_back(gps_track);
+
+    std::ofstream f{std::filesystem::path{
+        set_.output_path_.substr(0, set_.output_path_.size() - 1)}
+                        .replace_extension(".geojson")
+                        .string()};
+    f << j.dump(4);
+  }
+
   GPMFParserSettings set_;
+  rosbag2_cpp::Writer writer_;
   std::vector<std::unique_ptr<GPMFChunkBase>> chunks_;
   int64_t start_time_;
   int64_t end_time_;
+  std::vector<Eigen::Vector3d> lla_;
 };
 
 GPMFParser::GPMFParser(const GPMFParserSettings &set)
     : pimpl_{std::make_unique<impl>(set)} {}
 
 void GPMFParser::parse() { pimpl_->parse(); }
-
-void GPMFParser::write_bag(const std::string_view path) const {
-  pimpl_->write_bag(path);
-}
 
 GPMFParser::~GPMFParser() = default;

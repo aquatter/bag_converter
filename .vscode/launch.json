@@ -11,10 +11,10 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-i",
-                "~/data/academicheskaya/academ_11_11/GX010011.MP4",
+                "~/data/gopro13_allan_variance/GX010012.MP4",
+                "~/data/gopro13_allan_variance/GX020012.MP4",
                 "-o",
-                "~/data/academicheskaya/academ_11_11/GX010011",
-                "--compressed",
+                "~/data/gopro13_allan_variance/allan_variance",
                 "--no-images",
             ],
             "stopAtEntry": false,
