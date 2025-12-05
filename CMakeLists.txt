@@ -117,7 +117,7 @@ target_include_directories(gpmf-extractor PUBLIC
     gpmf-parser/demo
 )
 
-target_link_libraries(gpmf-extractor
+target_link_libraries(gpmf-extractor PUBLIC
     ${OpenCV_LIBS}
     fmt::fmt
     rcl::rcl
@@ -133,6 +133,7 @@ target_link_libraries(gpmf-extractor
     range-v3::concepts
     nlohmann_json::nlohmann_json
     tinyxml2::tinyxml2
+    CLI11
 )
 
 set_target_properties(gpmf-extractor PROPERTIES
