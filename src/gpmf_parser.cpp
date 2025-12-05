@@ -1,5 +1,7 @@
 // clang-format off
 #include <algorithm>
+#include <boost/algorithm/string/case_conv.hpp>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -15,6 +17,7 @@
 #include <stdexcept>
 // clang-format on
 
+#include <boost/algorithm/string.hpp>
 #include <chrono>
 #include <fmt/chrono.h>
 #include <fmt/color.h>
@@ -32,6 +35,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <string>
 #include <string_view>
 #include <tinyxml2.h>
 #include <unordered_map>
@@ -211,9 +215,33 @@ struct MP4Source {
 struct GPMFParser::impl {
   impl(const GPMFParserSettings &set) : set_{set} {
 
-    rosbag2_storage::StorageOptions storage_options;
-    storage_options.uri = set_.output_path_;
-    writer_.open(storage_options);
+    if (set_.paths_to_mp4_.size() == 1) {
+      if (std::filesystem::file_type::directory ==
+          std::filesystem::status(set_.paths_to_mp4_.front()).type()) {
+
+        std::vector<std::string> file_paths{};
+
+        for (auto &&entry :
+             std::filesystem::directory_iterator{set_.paths_to_mp4_.front()}) {
+
+          if (entry.is_regular_file() and
+              boost::algorithm::to_lower_copy(
+                  entry.path().extension().string()) == ".mp4") {
+
+            file_paths.push_back(entry.path().string());
+          }
+        }
+
+        std::sort(file_paths.begin(), file_paths.end());
+        set_.paths_to_mp4_ = std::move(file_paths);
+      }
+    }
+
+    if (set_.save_bag_) {
+      rosbag2_storage::StorageOptions storage_options;
+      storage_options.uri = set_.output_path_;
+      writer_.open(storage_options);
+    }
 
     if (not set_.no_images_) {
       chunks_.emplace_back(std::make_unique<SHUTChunk>(SHUTChunkSettings{
@@ -274,6 +302,10 @@ struct GPMFParser::impl {
   }
 
   void write_bag() {
+
+    if (not set_.save_bag_) {
+      return;
+    }
 
     using queue_type = std::pair<int64_t, GPMFChunkBase *>;
 

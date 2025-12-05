@@ -14,6 +14,7 @@ struct GPMFParserSettings {
   int64_t start_time_;
   int64_t end_time_;
   bool save_geojson_;
+  bool save_bag_;
 };
 
 class GPMFParser {

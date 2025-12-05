@@ -16,7 +16,7 @@ int main(int argc, char const *const *argv) {
     app.add_option("-i, --input", set.paths_to_mp4_,
                    "Specify input video paths")
         ->required()
-        ->check(CLI::ExistingFile);
+        ->check(CLI::ExistingFile | CLI::ExistingDirectory);
 
     app.add_option("-o, --output", set.output_path_,
                    "Specify output ros2 bag path");
@@ -48,6 +48,9 @@ int main(int argc, char const *const *argv) {
                  "Save GPS track to geojson and gpx")
         ->default_val(false);
 
+    app.add_option("--save-bag", set.save_bag_, "Convert to ROS bag")
+        ->default_val(true);
+
     CLI11_PARSE(app, argc, argv);
 
     if (set.output_path_.empty()) {
@@ -64,7 +67,11 @@ int main(int argc, char const *const *argv) {
                          "/";
     }
 
-    if (std::filesystem::exists(set.output_path_)) {
+    if (set.output_path_.back() != '/') {
+      set.output_path_ += "/";
+    }
+
+    if (set.save_bag_ and std::filesystem::exists(set.output_path_)) {
       fmt::print("\e[38;2;154;205;50mPath\e[0m \e[38;2;255;127;80m'{}'\e[0m "
                  "\e[38;2;154;205;50malready "
                  "exists. Remove? [y/n] \e[0m",

@@ -11,11 +11,12 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-i",
-                "~/data/gopro13_allan_variance/GX010012.MP4",
-                "~/data/gopro13_allan_variance/GX020012.MP4",
+                "~/data/GPRO271125.MP4",
                 "-o",
-                "~/data/gopro13_allan_variance/allan_variance",
-                "--no-images",
+                "~/data/GPRO271125",
+                "--geo",
+                "--save-bag",
+                "false"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
