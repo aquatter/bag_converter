@@ -1,7 +1,10 @@
 #pragma once
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
+
+struct GPMFChunkBase;
 
 struct GPMFParserSettings {
   double resize_;
@@ -15,6 +18,7 @@ struct GPMFParserSettings {
   int64_t end_time_;
   bool save_geojson_;
   bool save_bag_;
+  std::function<void(const GPMFChunkBase *)> callback_;
 };
 
 class GPMFParser {

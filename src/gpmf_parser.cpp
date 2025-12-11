@@ -11,6 +11,7 @@
 #include <GPMF_utils.h>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <gpmf_parser.hpp>
 #include <limits>
 #include <memory>
@@ -382,6 +383,12 @@ struct GPMFParser::impl {
                    ranges::actions::push_back(
                        m | transform([](auto &&val) { return val.lla_; }));
           });
+        }
+      }
+
+      if (set_.callback_) {
+        for (auto &&chunk : chunks_) {
+          chunk->visit(set_.callback_);
         }
       }
 
