@@ -11,7 +11,7 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-i",
-                "~/data/GPRO271125.MP4",
+                "/root/data/gopro13_allan_variance",
                 "-o",
                 "~/data/GPRO271125",
                 "--geo",

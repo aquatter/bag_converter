@@ -14,6 +14,7 @@
 #include <gpmf_parser.hpp>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 // clang-format on
 
@@ -28,8 +29,10 @@
 #include <progress_bar.hpp>
 #include <queue>
 #include <range/v3/action/push_back.hpp>
+#include <range/v3/algorithm/sort.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
+#include <regex>
 #include <rosbag2_cpp/writer.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -43,6 +46,39 @@
 
 using ranges::views::ints;
 using ranges::views::transform;
+
+std::optional<std::pair<int, int>>
+parce_record_part(const std::string_view str) {
+
+  std::regex re{R"(gx(\d{2})(\d{4}).mp4)"};
+
+  int part_num{0};
+  int record_num{0};
+
+  std::cmatch match{};
+  if (std::regex_search(str.data(), match, re)) {
+    const auto part_str{match[1].str()};
+    const auto record_str{match[2].str()};
+
+    re = R"(0*(\d+))";
+
+    if (std::regex_search(part_str.data(), match, re)) {
+      part_num = std::stoi(match[1].str());
+    } else {
+      return {};
+    }
+
+    if (std::regex_search(record_str.data(), match, re)) {
+      record_num = std::stoi(match[1].str());
+    } else {
+      return {};
+    }
+
+    return std::pair{record_num, part_num};
+  }
+
+  return {};
+}
 
 struct Payload {
   Payload(size_t mp4handle, uint32_t payload_index) : mp4handle_{mp4handle} {
@@ -213,28 +249,83 @@ struct MP4Source {
 };
 
 struct GPMFParser::impl {
+
+  struct Record {
+    struct Part {
+      int id_;
+      std::filesystem::path path_;
+    };
+
+    int id_;
+    std::vector<Part> parts_;
+  };
+
   impl(const GPMFParserSettings &set) : set_{set} {
 
-    if (set_.paths_to_mp4_.size() == 1) {
+    int rec_id{0};
+
+    std::unordered_map<int, Record> rec{};
+
+    for (auto &&input_path : set_.paths_to_mp4_) {
       if (std::filesystem::file_type::directory ==
-          std::filesystem::status(set_.paths_to_mp4_.front()).type()) {
+          std::filesystem::status(input_path).type()) {
 
-        std::vector<std::string> file_paths{};
+        for (auto &&entry : std::filesystem::directory_iterator{input_path}) {
 
-        for (auto &&entry :
-             std::filesystem::directory_iterator{set_.paths_to_mp4_.front()}) {
+          while (rec.contains(rec_id)) {
+            ++rec_id;
+          }
 
           if (entry.is_regular_file() and
               boost::algorithm::to_lower_copy(
                   entry.path().extension().string()) == ".mp4") {
 
-            file_paths.push_back(entry.path().string());
+            const auto record_part{
+                parce_record_part(boost::algorithm::to_lower_copy(
+                    entry.path().filename().string()))};
+
+            if (record_part.has_value()) {
+              rec[record_part->first].id_ = record_part->first;
+              rec[record_part->first].parts_.push_back(Record::Part{
+                  .id_ = record_part->second, .path_ = entry.path()});
+            } else {
+              rec[rec_id].id_ = rec_id;
+              rec[rec_id].parts_.push_back(
+                  Record::Part{.id_ = 0, .path_ = entry.path()});
+            }
           }
         }
+      } else {
+        while (rec.contains(rec_id)) {
+          ++rec_id;
+        }
 
-        std::sort(file_paths.begin(), file_paths.end());
-        set_.paths_to_mp4_ = std::move(file_paths);
+        if (boost::algorithm::to_lower_copy(
+                std::filesystem::path{input_path}.extension().string()) ==
+            ".mp4") {
+
+          const auto record_part{
+              parce_record_part(boost::algorithm::to_lower_copy(
+                  std::filesystem::path{input_path}.filename().string()))};
+
+          if (record_part.has_value()) {
+            rec[record_part->first].id_ = record_part->first;
+            rec[record_part->first].parts_.push_back(
+                Record::Part{.id_ = record_part->second, .path_ = input_path});
+          } else {
+            rec[rec_id].id_ = rec_id;
+            rec[rec_id].parts_.push_back(
+                Record::Part{.id_ = 0, .path_ = input_path});
+          }
+        }
       }
+    }
+
+    for (auto &&[id, r] : rec) {
+      ranges::sort(r.parts_,
+                   [](const auto &a, const auto &b) { return a.id_ < b.id_; });
+
+      records_.push_back(r);
     }
 
     if (set_.save_bag_) {
@@ -468,6 +559,7 @@ struct GPMFParser::impl {
   int64_t start_time_;
   int64_t end_time_;
   std::vector<Eigen::Vector3d> lla_;
+  std::vector<Record> records_;
 };
 
 GPMFParser::GPMFParser(const GPMFParserSettings &set)
