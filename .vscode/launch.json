@@ -11,9 +11,9 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-i",
-                "/root/data/gopro13_allan_variance",
+                "~/data/gopro/",
                 "-o",
-                "~/data/GPRO271125",
+                "~/data/gopro/",
                 "--geo",
                 "--save-bag",
                 "false"

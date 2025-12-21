@@ -15,10 +15,12 @@
 #include <gpmf_parser.hpp>
 #include <limits>
 #include <memory>
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <stdexcept>
 // clang-format on
 
+#include <GeographicLib/LocalCartesian.hpp>
 #include <boost/algorithm/string.hpp>
 #include <chrono>
 #include <fmt/chrono.h>
@@ -31,8 +33,10 @@
 #include <queue>
 #include <range/v3/action/push_back.hpp>
 #include <range/v3/algorithm/sort.hpp>
+#include <range/v3/view/enumerate.hpp>
 #include <range/v3/view/iota.hpp>
 #include <range/v3/view/transform.hpp>
+#include <range/v3/view/zip.hpp>
 #include <regex>
 #include <rosbag2_cpp/writer.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
@@ -45,8 +49,10 @@
 #include <unordered_map>
 #include <vector>
 
+using ranges::views::enumerate;
 using ranges::views::ints;
 using ranges::views::transform;
+using ranges::views::zip;
 
 std::optional<std::pair<int, int>>
 parce_record_part(const std::string_view str) {
@@ -203,7 +209,8 @@ struct MP4Source {
         GetGPMFSampleRate(cbobject, STR2FOURCC("GPS9"), STR2FOURCC("SHUT"),
                           GPMF_SAMPLE_RATE_PRECISE, nullptr, nullptr);
 
-    if (data_frame_rate_["ACCL"] != data_frame_rate_["GYRO"]) {
+    if (static_cast<int>(data_frame_rate_["ACCL"]) !=
+        static_cast<int>(data_frame_rate_["GYRO"])) {
       throw std::runtime_error{
           "accelerometer and gyroscope rates are not the same"};
     }
@@ -215,6 +222,10 @@ struct MP4Source {
     }
 
     return 0.0;
+  }
+
+  int duration() const {
+    return static_cast<int>(GetDuration(mp4handle_) + 0.5f);
   }
 
   void parse(std::span<std::unique_ptr<GPMFChunkBase>> chunks) {
@@ -329,12 +340,6 @@ struct GPMFParser::impl {
       records_.push_back(r);
     }
 
-    if (set_.save_bag_) {
-      rosbag2_storage::StorageOptions storage_options;
-      storage_options.uri = set_.output_path_;
-      writer_.open(storage_options);
-    }
-
     if (not set_.no_images_) {
       chunks_.emplace_back(std::make_unique<SHUTChunk>(SHUTChunkSettings{
           .resize_ = set_.resize_,
@@ -346,8 +351,12 @@ struct GPMFParser::impl {
       }));
     }
 
-    chunks_.emplace_back(std::make_unique<GPSChunk>());
-    chunks_.emplace_back(std::make_unique<IMUChunk>());
+    if (not set_.no_gps_) {
+      chunks_.emplace_back(std::make_unique<GPSChunk>());
+    }
+    if (not set_.no_imu_) {
+      chunks_.emplace_back(std::make_unique<IMUChunk>());
+    }
 
     start_time_ = 1'000'000'000l * set_.start_time_;
     end_time_ = 1'000'000'000l * set_.end_time_;
@@ -358,45 +367,102 @@ struct GPMFParser::impl {
 
   void parse() {
 
-    for (auto &&path_to_mp4 : set_.paths_to_mp4_) {
-      MP4Source mp4{path_to_mp4};
+    int total_duration{0};
 
-      for (auto &&chunk : chunks_) {
-        chunk->reset();
-        chunk->open_mp4(path_to_mp4);
-        chunk->set_frame_rate(mp4.frame_rate(chunk->four_cc()[0].data()));
-      }
+    for (auto &&record : records_) {
+      lla_.clear();
+      create_bag(fmt::format("{}record_{}", set_.output_path_, record.id_));
 
-      mp4.parse(chunks_);
+      int track_duration{0};
 
-      if (set_.save_geojson_) {
+      for (auto &&part : record.parts_) {
+
+        MP4Source mp4{part.path_.string()};
 
         for (auto &&chunk : chunks_) {
-          chunk->visit([this](const GPMFChunkBase *chunk) {
-            if (chunk->whoami() != ChunkType::GPS) {
-              return;
-            }
-
-            const auto &m{static_cast<const GPSChunk *>(chunk)->measurements_};
-
-            lla_ = std::move(lla_) |
-                   ranges::actions::push_back(
-                       m | transform([](auto &&val) { return val.lla_; }));
-          });
+          chunk->reset();
+          chunk->open_mp4(part.path_.string());
+          chunk->set_frame_rate(mp4.frame_rate(chunk->four_cc()[0].data()));
         }
+
+        track_duration += mp4.duration();
+        mp4.parse(chunks_);
+
+        if (set_.save_geojson_) {
+
+          for (auto &&chunk : chunks_) {
+            chunk->visit([this](const GPMFChunkBase *chunk) {
+              if (chunk->whoami() != ChunkType::GPS) {
+                return;
+              }
+
+              const auto &m{
+                  static_cast<const GPSChunk *>(chunk)->measurements_};
+
+              lla_ = std::move(lla_) |
+                     ranges::actions::push_back(
+                         m | transform([](auto &&val) { return val.lla_; }));
+
+              gps_timestamps_ =
+                  std::move(gps_timestamps_) |
+                  ranges::actions::push_back(
+                      m | transform([](auto &&val) { return val.timestamp_; }));
+            });
+          }
+        }
+
+        if (set_.callback_) {
+          for (auto &&chunk : chunks_) {
+            chunk->visit(set_.callback_);
+          }
+        }
+
+        write_bag();
       }
 
-      if (set_.callback_) {
-        for (auto &&chunk : chunks_) {
-          chunk->visit(set_.callback_);
-        }
-      }
+      total_duration += track_duration;
 
-      write_bag();
+      fmt::print("\e[38;2;154;205;50mTrack duration: \e[0m"
+                 "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m hours \e[0m"
+                 "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m minuts \e[0m"
+                 "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m "
+                 "seconds\e[0m\n",
+                 track_duration / 3600, (track_duration % 3600) / 60,
+                 (track_duration % 3600) % 60);
+
+      write_geojson(
+          fmt::format("record_{}", record.id_),
+          fmt::format("{}record_{}.geojson", set_.output_path_, record.id_));
+
+      write_gpx(fmt::format("{}record_{}.gpx", set_.output_path_, record.id_));
+
+      track_length();
+
+      close_bag();
     }
 
-    write_geojson();
-    write_gpx();
+    if (set_.save_geojson_) {
+      fmt::print(
+          "\e[38;2;154;205;50mTotal GPS track length: \e[0m"
+          "\e[38;2;255;127;80m{:.3f}\e[0m\e[38;2;154;205;50m kilometers\e[0m\n",
+          1.0e-3 * track_length_);
+    }
+
+    fmt::print("\e[38;2;154;205;50mTotal duration: \e[0m"
+               "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m hours \e[0m"
+               "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m minuts \e[0m"
+               "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m "
+               "seconds\e[0m\n",
+               total_duration / 3600, (total_duration % 3600) / 60,
+               (total_duration % 3600) % 60);
+  }
+
+  void close_bag() {
+    if (not set_.save_bag_) {
+      return;
+    }
+
+    writer_.close();
   }
 
   void write_bag() {
@@ -470,7 +536,7 @@ struct GPMFParser::impl {
     bar.done();
   }
 
-  void write_gpx() {
+  void write_gpx(const std::string_view path) {
     if (not set_.save_geojson_) {
       return;
     }
@@ -522,41 +588,92 @@ struct GPMFParser::impl {
       trkseg->InsertEndChild(trkpt);
     }
 
-    doc.SaveFile(std::filesystem::path{
-        set_.output_path_.substr(0, set_.output_path_.size() - 1)}
-                     .replace_extension(".gpx")
-                     .string()
-                     .c_str());
+    doc.SaveFile(path.data());
   }
 
-  void write_geojson() {
+  void track_length() {
+    if (set_.save_geojson_ == false) {
+      return;
+    }
+
+    double current_length{0.0};
+
+    if (proj_.has_value() == false && lla_.size() > 0) {
+      proj_ = GeographicLib::LocalCartesian(lla_.front().x(), lla_.front().y(),
+                                            lla_.front().z());
+      track_length_ = 0.0;
+    }
+
+    Eigen::Vector2d prev_coord{Eigen::Vector2d::Zero()};
+    {
+      double z{0.0};
+      proj_->Forward(lla_.front().x(), lla_.front().y(), lla_.front().z(),
+                     prev_coord.x(), prev_coord.y(), z);
+    }
+
+    for (auto &&coord : lla_) {
+      double z{0.0};
+      Eigen::Vector2d enu{};
+      proj_->Forward(coord.x(), coord.y(), coord.z(), enu.x(), enu.y(), z);
+
+      if ((enu - prev_coord).norm() > 5.0) {
+        current_length += (enu - prev_coord).norm();
+        prev_coord = enu;
+      }
+    }
+
+    track_length_ += current_length;
+
+    fmt::print(
+        "\e[38;2;154;205;50mGPS track length: \e[0m"
+        "\e[38;2;255;127;80m{:.3f}\e[0m\e[38;2;154;205;50m kilometers\e[0m\n",
+        1.0e-3 * current_length);
+  }
+
+  void create_bag(const std::string_view name) {
+    if (not set_.save_bag_) {
+      return;
+    }
+
+    if (std::filesystem::exists(name.data())) {
+      std::filesystem::remove_all(name.data());
+    }
+
+    rosbag2_storage::StorageOptions storage_options;
+    storage_options.uri = name.data();
+    writer_.open(storage_options);
+  }
+
+  void write_geojson(const std::string_view name, const std::string_view path) {
     if (not set_.save_geojson_) {
       return;
     }
 
     nlohmann::json j{};
     j["type"] = "FeatureCollection";
-    j["name"] = std::filesystem::path{set_.output_path_.substr(
-                                          0, set_.output_path_.size() - 1)}
-                    .filename()
-                    .string();
+    j["name"] = name.data();
 
     nlohmann::json gps_track{};
     gps_track["type"] = "Feature";
     gps_track["geometry"]["type"] = "LineString";
-    gps_track["properties"]["description"] = "GPS track";
-    gps_track["properties"]["marker-color"] = "#43ed54ff";
 
-    for (auto &&gps : lla_) {
+    for (auto &&[i, val] : zip(lla_, gps_timestamps_) | enumerate) {
+
+      auto &&[gps, timestamp] = val;
+      nlohmann::json feature{};
+
+      feature["type"] = "Feature";
+      feature["id"] = i;
+      feature["geometry"]["type"] = "Point";
+      feature["geometry"]["coordinates"] = {gps.y(), gps.x()};
+      feature["properties"]["timestamp"] = timestamp;
       gps_track["geometry"]["coordinates"].push_back({gps.y(), gps.x()});
+      j["features"].push_back(feature);
     }
 
     j["features"].push_back(gps_track);
 
-    std::ofstream f{std::filesystem::path{
-        set_.output_path_.substr(0, set_.output_path_.size() - 1)}
-                        .replace_extension(".geojson")
-                        .string()};
+    std::ofstream f{path.data()};
     f << j.dump(4);
   }
 
@@ -566,7 +683,11 @@ struct GPMFParser::impl {
   int64_t start_time_;
   int64_t end_time_;
   std::vector<Eigen::Vector3d> lla_;
+  std::vector<int64_t> gps_timestamps_;
   std::vector<Record> records_;
+  std::optional<GeographicLib::LocalCartesian> proj_;
+  double track_length_{0.0};
+  float track_duration_{0.0f};
 };
 
 GPMFParser::GPMFParser(const GPMFParserSettings &set)

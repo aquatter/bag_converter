@@ -38,6 +38,12 @@ int main(int argc, char const *const *argv) {
     app.add_flag("--no-images", set.no_images_, "Don't extract images")
         ->default_val(false);
 
+    app.add_flag("--no-imu", set.no_imu_, "Don't extract IMU data")
+        ->default_val(false);
+
+    app.add_flag("--no-gps", set.no_gps_, "Don't extract GPS data")
+        ->default_val(false);
+
     app.add_option("--start", set.start_time_, "Start time to process, s")
         ->default_val(-1);
 
@@ -71,6 +77,7 @@ int main(int argc, char const *const *argv) {
       set.output_path_ += "/";
     }
 
+#if 0
     if (set.save_bag_ and std::filesystem::exists(set.output_path_)) {
       fmt::print("\e[38;2;154;205;50mPath\e[0m \e[38;2;255;127;80m'{}'\e[0m "
                  "\e[38;2;154;205;50malready "
@@ -86,6 +93,7 @@ int main(int argc, char const *const *argv) {
         return EXIT_FAILURE;
       }
     }
+#endif
 
     GPMFParser gpmf_parser{set};
     gpmf_parser.parse();

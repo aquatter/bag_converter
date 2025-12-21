@@ -1,8 +1,12 @@
 #pragma once
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
+
+std::optional<std::pair<int, int>>
+parce_record_part(const std::string_view str);
 
 struct GPMFChunkBase;
 
@@ -14,6 +18,8 @@ struct GPMFParserSettings {
   bool extract_images_;
   bool compress_;
   bool no_images_;
+  bool no_imu_;
+  bool no_gps_;
   int64_t start_time_;
   int64_t end_time_;
   bool save_geojson_;
