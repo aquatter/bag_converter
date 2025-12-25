@@ -11,9 +11,9 @@
             "program": "${command:cmake.launchTargetPath}",
             "args": [
                 "-i",
-                "~/data/gopro/",
-                "-o",
-                "~/data/gopro/",
+                "~/data/domodedovo/gopro_01_11/GX010004.MP4",
+                "-a",
+                "~/data/domodedovo/gopro_01_11/gt.geojson",
                 "--geo",
                 "--save-bag",
                 "false"

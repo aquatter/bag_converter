@@ -64,10 +64,8 @@ void SHUTChunk::create_measurements() {
 
   num_frames_ = static_cast<size_t>(cap_->get(cv::CAP_PROP_FRAME_COUNT));
 
-  // if (total_num != num_frames) {
-  //   throw std::runtime_error{
-  //       "number of frames in GPMF and video are not equal"};
-  // }
+  const ptrdiff_t diff{static_cast<ptrdiff_t>(num_frames_) -
+                       static_cast<ptrdiff_t>(total_num)};
 
   measurements_.reserve(total_num);
 
@@ -84,7 +82,7 @@ void SHUTChunk::create_measurements() {
 
   const double delta_frame{1'000'000'000.0 / frame_rate_};
 
-  for (auto &&k : ints(0ul, data_.back().num_frames_)) {
+  for (auto &&k : ints(0ul, data_.back().num_frames_ + diff)) {
     measurements_.push_back(data_.back().timestamp_ +
                             static_cast<int64_t>(k * delta_frame + 0.5));
   }
