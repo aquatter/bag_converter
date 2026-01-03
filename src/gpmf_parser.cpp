@@ -403,6 +403,11 @@ struct GPMFParser::impl {
                      ranges::actions::push_back(
                          m | transform([](auto &&val) { return val.lla_; }));
 
+              gps_fix_ =
+                  std::move(gps_fix_) |
+                  ranges::actions::push_back(
+                      m | transform([](auto &&val) { return val.fix_; }));
+
               gps_timestamps_ =
                   std::move(gps_timestamps_) |
                   ranges::actions::push_back(
@@ -573,7 +578,11 @@ struct GPMFParser::impl {
 
     trk->InsertEndChild(name);
 
-    for (auto &&gps : lla_) {
+    for (auto &&[gps, fix] : zip(lla_, gps_fix_)) {
+      if (fix != 3.0) {
+        continue;
+      }
+
       auto trkpt{doc.NewElement("trkpt")};
       trkpt->SetAttribute("lat", gps.x());
       trkpt->SetAttribute("lon", gps.y());
@@ -592,34 +601,72 @@ struct GPMFParser::impl {
   }
 
   void track_length() {
-    if (set_.save_geojson_ == false) {
+    if (not set_.save_geojson_) {
       return;
     }
 
     double current_length{0.0};
 
     if (proj_.has_value() == false && lla_.size() > 0) {
-      proj_ = GeographicLib::LocalCartesian(lla_.front().x(), lla_.front().y(),
-                                            lla_.front().z());
-      track_length_ = 0.0;
+
+      for (auto &&[lla, fix] : zip(lla_, gps_fix_)) {
+        if (fix == 3.0) {
+          proj_ = GeographicLib::LocalCartesian(lla.x(), lla.y(), lla.z());
+          track_length_ = 0.0;
+          break;
+        }
+      }
+
+      if (not proj_.has_value()) {
+        fmt::print(fmt::fg(fmt::color::red),
+                   "unable to initialize a local CS\n");
+        return;
+      }
     }
 
     Eigen::Vector2d prev_coord{Eigen::Vector2d::Zero()};
+    int64_t prev_timestamp{0};
+    size_t ind{0};
+
     {
       double z{0.0};
-      proj_->Forward(lla_.front().x(), lla_.front().y(), lla_.front().z(),
-                     prev_coord.x(), prev_coord.y(), z);
+
+      for (auto &&[lla, fix, timestamp] :
+           zip(lla_, gps_fix_, gps_timestamps_)) {
+        if (fix == 3.0) {
+          proj_->Forward(lla.x(), lla.y(), lla.z(), prev_coord.x(),
+                         prev_coord.y(), z);
+          prev_timestamp = timestamp;
+          break;
+        }
+        ++ind;
+      }
+
+      ++ind;
     }
 
-    for (auto &&coord : lla_) {
+    while (ind < lla_.size()) {
+      if (gps_fix_[ind] != 3.0) {
+        ++ind;
+        continue;
+      }
+
       double z{0.0};
       Eigen::Vector2d enu{};
-      proj_->Forward(coord.x(), coord.y(), coord.z(), enu.x(), enu.y(), z);
+      proj_->Forward(lla_[ind].x(), lla_[ind].y(), lla_[ind].z(), enu.x(),
+                     enu.y(), z);
+
+      if (gps_timestamps_[ind] - prev_timestamp > 200'000'000) {
+        prev_coord = enu;
+      }
 
       if ((enu - prev_coord).norm() > 5.0) {
         current_length += (enu - prev_coord).norm();
         prev_coord = enu;
       }
+
+      prev_timestamp = gps_timestamps_[ind];
+      ++ind;
     }
 
     track_length_ += current_length;
@@ -657,9 +704,14 @@ struct GPMFParser::impl {
     gps_track["type"] = "Feature";
     gps_track["geometry"]["type"] = "LineString";
 
-    for (auto &&[i, val] : zip(lla_, gps_timestamps_) | enumerate) {
+    for (auto &&[i, val] : zip(lla_, gps_timestamps_, gps_fix_) | enumerate) {
 
-      auto &&[gps, timestamp] = val;
+      auto &&[gps, timestamp, fix] = val;
+
+      if (fix != 3.0) {
+        continue;
+      }
+
       nlohmann::json feature{};
 
       feature["type"] = "Feature";
@@ -683,6 +735,7 @@ struct GPMFParser::impl {
   int64_t start_time_;
   int64_t end_time_;
   std::vector<Eigen::Vector3d> lla_;
+  std::vector<double> gps_fix_;
   std::vector<int64_t> gps_timestamps_;
   std::vector<Record> records_;
   std::optional<GeographicLib::LocalCartesian> proj_;

@@ -111,6 +111,7 @@ struct GPSChunk : GPMFChunkBase {
     std::vector<Eigen::Vector3d> lla_;
     std::vector<double> vel2d_;
     std::vector<double> vel3d_;
+    std::vector<double> fix_;
   };
 
   struct Measurement {
@@ -118,6 +119,7 @@ struct GPSChunk : GPMFChunkBase {
     Eigen::Vector3d lla_;
     double vel2d_;
     double vel3d_;
+    double fix_;
   };
 
   std::span<const std::string_view> four_cc() const override {

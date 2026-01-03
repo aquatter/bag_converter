@@ -353,6 +353,7 @@ void GPSChunk::add(const std::string_view, uint64_t timestamp,
   d.lla_.resize(num_elements);
   d.vel2d_.resize(num_elements);
   d.vel3d_.resize(num_elements);
+  d.fix_.resize(num_elements);
 
   for (auto &&i : ints(0ul, num_elements)) {
     d.lla_[i].x() = vec[i * num_components_];
@@ -360,6 +361,7 @@ void GPSChunk::add(const std::string_view, uint64_t timestamp,
     d.lla_[i].z() = vec[i * num_components_ + 2];
     d.vel2d_[i] = vec[i * num_components_ + 3];
     d.vel3d_[i] = vec[i * num_components_ + 4];
+    d.fix_[i] = vec[i * num_components_ + 8];
   }
 
   data_.push_back(std::move(d));
@@ -378,36 +380,44 @@ void GPSChunk::create_measurements() {
                              static_cast<double>(d[0].lla_.size())};
 
     for (auto &&[k, gps_data] :
-         enumerate(zip(d[0].lla_, d[0].vel2d_, d[0].vel3d_))) {
-      auto &&[lla, vel2d, vel3d] = gps_data;
+         enumerate(zip(d[0].lla_, d[0].vel2d_, d[0].vel3d_, d[0].fix_))) {
+      auto &&[lla, vel2d, vel3d, fix] = gps_data;
 
       measurements_.push_back(
           Measurement{.timestamp_ = d[0].timestamp_ +
                                     static_cast<int64_t>(k * delta_frame + 0.5),
                       .lla_ = lla,
                       .vel2d_ = vel2d,
-                      .vel3d_ = vel3d});
+                      .vel3d_ = vel3d,
+                      .fix_ = fix});
     }
   }
 
   const double delta_frame{1'000'000'000.0 / frame_rate_};
 
-  for (auto &&[k, gps_data] : enumerate(
-           zip(data_.back().lla_, data_.back().vel2d_, data_.back().vel3d_))) {
-    auto &&[lla, vel2d, vel3d] = gps_data;
+  for (auto &&[k, gps_data] :
+       enumerate(zip(data_.back().lla_, data_.back().vel2d_,
+                     data_.back().vel3d_, data_.back().fix_))) {
+    auto &&[lla, vel2d, vel3d, fix] = gps_data;
 
     measurements_.push_back(
         Measurement{.timestamp_ = data_.back().timestamp_ +
                                   static_cast<int64_t>(k * delta_frame + 0.5),
                     .lla_ = lla,
                     .vel2d_ = vel2d,
-                    .vel3d_ = vel3d});
+                    .vel3d_ = vel3d,
+                    .fix_ = fix});
   }
 }
 
 void GPSChunk::write(rosbag2_cpp::Writer &writer) {
 
   if (index_ >= measurements_.size()) {
+    return;
+  }
+
+  if (measurements_[index_].fix_ != 3.0) {
+    ++index_;
     return;
   }
 
@@ -422,6 +432,7 @@ void GPSChunk::write(rosbag2_cpp::Writer &writer) {
   gps_msg.latitude = measurements_[index_].lla_.x();
   gps_msg.longitude = measurements_[index_].lla_.y();
   gps_msg.altitude = measurements_[index_].lla_.z();
+  gps_msg.status.status = static_cast<uint8_t>(measurements_[index_].fix_);
   gps_msg.header.frame_id = "gps";
   gps_msg.header.stamp.sec = timestamp_sec;
   gps_msg.header.stamp.nanosec = timestamp_nanosec;
