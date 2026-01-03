@@ -1,3 +1,4 @@
+#include <mutex>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -25,4 +26,5 @@ private:
   size_t max_count_size_{0};
   static constexpr int length_{50};
   int curr_pos_;
+  std::mutex protector_;
 };

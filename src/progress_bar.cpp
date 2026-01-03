@@ -1,5 +1,6 @@
 #include <fmt/color.h>
 #include <fmt/format.h>
+#include <mutex>
 #include <progress_bar.hpp>
 
 ProgressBar::ProgressBar(std::span<const ProgressInfo> topics)
@@ -34,6 +35,8 @@ void ProgressBar::advance(const std::string &topic, size_t how_much) {
   if (not topic_name_to_ind_.contains(topic)) {
     return;
   }
+
+  std::lock_guard<std::mutex> lock{protector_};
 
   auto &info{info_[topic_name_to_ind_[topic]]};
 
