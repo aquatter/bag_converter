@@ -9,8 +9,8 @@
 #include <optional>
 #include <rosbag2_cpp/writer.hpp>
 #include <span>
-#include <stdexcept>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 enum class ChunkType { Camera, GPS, IMU };
@@ -122,6 +122,9 @@ struct GPSChunk : GPMFChunkBase {
     double fix_;
   };
 
+  explicit GPSChunk(
+      std::span<const std::pair<int64_t, int64_t>> exclusion_intervals);
+
   std::span<const std::string_view> four_cc() const override {
     return fourcc_str_;
   }
@@ -151,10 +154,13 @@ struct GPSChunk : GPMFChunkBase {
     return {measurements_.front().timestamp_, measurements_.back().timestamp_};
   }
 
+  bool exclude(int64_t timestamp) const noexcept;
+
   static constexpr size_t num_components_{9};
   static constexpr std::array<std::string_view, 1> fourcc_str_{"GPS9"};
   std::vector<Data> data_;
   std::vector<Measurement> measurements_;
+  std::vector<std::pair<int64_t, int64_t>> exclusion_intervals_;
 };
 
 struct IMUChunk : GPMFChunkBase {

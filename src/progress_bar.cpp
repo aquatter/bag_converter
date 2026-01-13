@@ -3,6 +3,16 @@
 #include <mutex>
 #include <progress_bar.hpp>
 
+ProgressBar::ProgressBar(size_t message_count, const std::string_view tag)
+    : info_{ProgressInfo{.message_count_ = message_count,
+                         .processed_count_ = 0,
+                         .topic_name_ = tag.data(),
+                         .ind_ = 0}} {
+  max_name_size_ = info_.front().topic_name_.size();
+  max_count_size_ = fmt::format("{}", info_.front().message_count_).size();
+  topic_name_to_ind_[info_.front().topic_name_] = 0;
+}
+
 ProgressBar::ProgressBar(std::span<const ProgressInfo> topics)
     : info_{topics.begin(), topics.end()} {
 
@@ -30,17 +40,12 @@ void ProgressBar::progress(const std::string &topic, size_t progress) {
   advance(topic, 0);
 }
 
-void ProgressBar::advance(const std::string &topic, size_t how_much) {
+void ProgressBar::advance(size_t how_much) { advance(info_.front(), how_much); }
 
-  if (not topic_name_to_ind_.contains(topic)) {
-    return;
-  }
-
-  std::lock_guard<std::mutex> lock{protector_};
-
-  auto &info{info_[topic_name_to_ind_[topic]]};
+void ProgressBar::advance(ProgressInfo &info, size_t how_much) {
 
   info.processed_count_ += how_much;
+
   const int progress{
       std::min(static_cast<int>(static_cast<float>(length_) *
                                 static_cast<float>(info.processed_count_) /
@@ -64,22 +69,36 @@ void ProgressBar::advance(const std::string &topic, size_t how_much) {
   if (progress == length_) {
     fmt::print("\e[38;2;154;205;50m{:<{}}\e[0m [\e[38;5;69m{:-^{}}\e[0m] "
                "{:>{}}/{:>{}} \e[38;2;255;127;80m100%\e[0m\n",
-               topic, max_name_size_, "-", length_, info.processed_count_,
-               max_count_size_, info.message_count_, max_count_size_);
+               info.topic_name_, max_name_size_, "-", length_,
+               info.processed_count_, max_count_size_, info.message_count_,
+               max_count_size_);
   } else if (progress == 0) {
     fmt::print("\e[38;2;154;205;50m{:<{}}\e[0m [{:^{}}] "
                "{:>{}}/{:>{}} \e[38;2;255;127;80m{:>3}%\e[0m\n",
-               topic, max_name_size_, " ", length_, info.processed_count_,
-               max_count_size_, info.message_count_, max_count_size_, percents);
+               info.topic_name_, max_name_size_, " ", length_,
+               info.processed_count_, max_count_size_, info.message_count_,
+               max_count_size_, percents);
   } else {
     fmt::print("\e[38;2;154;205;50m{:<{}}\e[0m [\e[38;5;69m{:-^{}}\e[0m{:^{}}] "
                "{:>{}}/{:>{}} \e[38;2;255;127;80m{:>3}%\e[0m\n",
-               topic, max_name_size_, "-", progress, " ", length_ - progress,
-               info.processed_count_, max_count_size_, info.message_count_,
-               max_count_size_, percents);
+               info.topic_name_, max_name_size_, "-", progress, " ",
+               length_ - progress, info.processed_count_, max_count_size_,
+               info.message_count_, max_count_size_, percents);
   }
 
   curr_pos_ = info.ind_ + 1;
+}
+
+void ProgressBar::advance(const std::string &topic, size_t how_much) {
+
+  if (not topic_name_to_ind_.contains(topic)) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock{protector_};
+
+  auto &info{info_[topic_name_to_ind_[topic]]};
+  advance(info, how_much);
 }
 
 void ProgressBar::done() {

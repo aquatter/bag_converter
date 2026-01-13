@@ -24,6 +24,7 @@ struct GPMFParserSettings {
   int64_t end_time_;
   bool save_geojson_;
   bool save_bag_;
+  std::vector<std::pair<int64_t, int64_t>> gps_exclusion_intervals_;
   std::function<void(const GPMFChunkBase *)> callback_;
 };
 

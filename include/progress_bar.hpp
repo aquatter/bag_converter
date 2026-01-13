@@ -1,6 +1,8 @@
+#include <cstddef>
 #include <mutex>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -13,13 +15,18 @@ public:
     int ind_;
   };
 
+  ProgressBar(size_t message_count, const std::string_view tag);
   ProgressBar(std::span<const ProgressInfo> topics);
+
+  void advance(size_t how_much = 1);
   void advance(const std::string &topic, size_t how_much = 1);
   void progress(const std::string &topic, size_t progress);
   void done();
   void draw();
 
 private:
+  void advance(ProgressInfo &info, size_t how_much = 1);
+
   std::vector<ProgressInfo> info_;
   std::unordered_map<std::string, int> topic_name_to_ind_;
   size_t max_name_size_{0};

@@ -274,6 +274,11 @@ struct GPMFParser::impl {
 
   impl(const GPMFParserSettings &set) : set_{set} {
 
+    for (auto &&[start, end] : set_.gps_exclusion_intervals_) {
+      start *= 1'000'000'000l;
+      end *= 1'000'000'000l;
+    }
+
     int rec_id{0};
 
     std::unordered_map<int, Record> rec{};
@@ -352,7 +357,8 @@ struct GPMFParser::impl {
     }
 
     if (not set_.no_gps_) {
-      chunks_.emplace_back(std::make_unique<GPSChunk>());
+      chunks_.emplace_back(
+          std::make_unique<GPSChunk>(set_.gps_exclusion_intervals_));
     }
     if (not set_.no_imu_) {
       chunks_.emplace_back(std::make_unique<IMUChunk>());
@@ -519,6 +525,7 @@ struct GPMFParser::impl {
       } else if (ptr->timestamp().value() > end_time_) {
         continue;
       } else {
+
         ptr->write(writer_);
       }
 
@@ -578,8 +585,12 @@ struct GPMFParser::impl {
 
     trk->InsertEndChild(name);
 
-    for (auto &&[gps, fix] : zip(lla_, gps_fix_)) {
+    for (auto &&[gps, fix, timestamp] : zip(lla_, gps_fix_, gps_timestamps_)) {
       if (fix != 3.0) {
+        continue;
+      }
+
+      if (exclude(timestamp)) {
         continue;
       }
 
@@ -609,12 +620,20 @@ struct GPMFParser::impl {
 
     if (proj_.has_value() == false && lla_.size() > 0) {
 
-      for (auto &&[lla, fix] : zip(lla_, gps_fix_)) {
-        if (fix == 3.0) {
-          proj_ = GeographicLib::LocalCartesian(lla.x(), lla.y(), lla.z());
-          track_length_ = 0.0;
-          break;
+      for (auto &&[lla, fix, timestamp] :
+           zip(lla_, gps_fix_, gps_timestamps_)) {
+
+        if (fix != 3.0) {
+          continue;
         }
+
+        if (exclude(timestamp)) {
+          continue;
+        }
+
+        proj_ = GeographicLib::LocalCartesian(lla.x(), lla.y(), lla.z());
+        track_length_ = 0.0;
+        break;
       }
 
       if (not proj_.has_value()) {
@@ -633,12 +652,22 @@ struct GPMFParser::impl {
 
       for (auto &&[lla, fix, timestamp] :
            zip(lla_, gps_fix_, gps_timestamps_)) {
-        if (fix == 3.0) {
-          proj_->Forward(lla.x(), lla.y(), lla.z(), prev_coord.x(),
-                         prev_coord.y(), z);
-          prev_timestamp = timestamp;
-          break;
+
+        if (fix != 3.0) {
+          ++ind;
+          continue;
         }
+
+        if (exclude(timestamp)) {
+          ++ind;
+          continue;
+        }
+
+        proj_->Forward(lla.x(), lla.y(), lla.z(), prev_coord.x(),
+                       prev_coord.y(), z);
+        prev_timestamp = timestamp;
+        break;
+
         ++ind;
       }
 
@@ -647,6 +676,11 @@ struct GPMFParser::impl {
 
     while (ind < lla_.size()) {
       if (gps_fix_[ind] != 3.0) {
+        ++ind;
+        continue;
+      }
+
+      if (exclude(gps_timestamps_[ind])) {
         ++ind;
         continue;
       }
@@ -712,6 +746,10 @@ struct GPMFParser::impl {
         continue;
       }
 
+      if (exclude(timestamp)) {
+        continue;
+      }
+
       nlohmann::json feature{};
 
       feature["type"] = "Feature";
@@ -727,6 +765,16 @@ struct GPMFParser::impl {
 
     std::ofstream f{path.data()};
     f << j.dump(4);
+  }
+
+  bool exclude(int64_t timestamp) {
+    for (auto &&[start, end] : set_.gps_exclusion_intervals_) {
+      if (timestamp >= start and timestamp <= end) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   GPMFParserSettings set_;

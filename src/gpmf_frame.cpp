@@ -343,6 +343,11 @@ void IMUChunk::reset() {
   gyro_data_.clear();
 }
 
+GPSChunk::GPSChunk(
+    std::span<const std::pair<int64_t, int64_t>> exclusion_intervals)
+    : exclusion_intervals_{exclusion_intervals.begin(),
+                           exclusion_intervals.end()} {}
+
 void GPSChunk::add(const std::string_view, uint64_t timestamp,
                    std::span<const double> vec) {
 
@@ -421,6 +426,11 @@ void GPSChunk::write(rosbag2_cpp::Writer &writer) {
     return;
   }
 
+  if (exclude(measurements_[index_].timestamp_)) {
+    ++index_;
+    return;
+  }
+
   const int32_t timestamp_sec{
       static_cast<int32_t>(measurements_[index_].timestamp_ / 1'000'000'000)};
 
@@ -445,4 +455,14 @@ void GPSChunk::reset() {
   index_ = 0;
   measurements_.clear();
   data_.clear();
+}
+
+bool GPSChunk::exclude(int64_t timestamp) const noexcept {
+  for (auto &&[start, end] : exclusion_intervals_) {
+    if (timestamp >= start and timestamp <= end) {
+      return true;
+    }
+  }
+
+  return false;
 }
