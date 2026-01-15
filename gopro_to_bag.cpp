@@ -1,3 +1,4 @@
+#include "CLI/CLI.hpp"
 #include <CLI/CLI.hpp>
 #include <cstdlib>
 #include <exception>
@@ -60,6 +61,11 @@ int main(int argc, char const *const *argv) {
     app.add_option(
         "--exclude-gps", set.gps_exclusion_intervals_,
         "Intervals in seconds where GPS measurements should be excluded");
+
+    app.add_option("--exclude-gps-file", set.path_to_exclusion_intervals_,
+                   "JSON file with intervals in seconds where GPS measurements "
+                   "should be excluded")
+        ->check(CLI::ExistingFile);
 
     CLI11_PARSE(app, argc, argv);
 

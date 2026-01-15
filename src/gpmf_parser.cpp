@@ -274,9 +274,11 @@ struct GPMFParser::impl {
 
   impl(const GPMFParserSettings &set) : set_{set} {
 
-    for (auto &&[start, end] : set_.gps_exclusion_intervals_) {
-      start *= 1'000'000'000l;
-      end *= 1'000'000'000l;
+    if (not set_.gps_exclusion_intervals_.empty()) {
+      for (auto &&[start, end] : set_.gps_exclusion_intervals_) {
+        gps_exclusion_intervals_.push_back(
+            {1'000'000'000l * start, 1'000'000'000l * end});
+      }
     }
 
     int rec_id{0};
@@ -358,7 +360,7 @@ struct GPMFParser::impl {
 
     if (not set_.no_gps_) {
       chunks_.emplace_back(
-          std::make_unique<GPSChunk>(set_.gps_exclusion_intervals_));
+          std::make_unique<GPSChunk>(gps_exclusion_intervals_));
     }
     if (not set_.no_imu_) {
       chunks_.emplace_back(std::make_unique<IMUChunk>());
@@ -369,6 +371,52 @@ struct GPMFParser::impl {
 
     start_time_ = start_time_ < 0 ? 0 : start_time_;
     end_time_ = end_time_ < 0 ? std::numeric_limits<int64_t>::max() : end_time_;
+
+    load_intervals();
+  }
+
+  void load_intervals() {
+    if (not std::filesystem::exists(set_.path_to_exclusion_intervals_)) {
+      return;
+    }
+
+    std::ifstream f{set_.path_to_exclusion_intervals_};
+    nlohmann::json json = nlohmann::json::parse(f);
+
+    for (auto &&json_record : json["intervals"]) {
+
+      const auto record_id{json_record["record"].get<size_t>()};
+
+      for (auto &&json_interval : json_record["data"]) {
+        exclusion_intervals_map_[record_id].push_back(
+            {1'000'000'000l * static_cast<int64_t>(json_interval[0]),
+             1'000'000'000l * static_cast<int64_t>(json_interval[1])});
+      }
+    }
+  }
+
+  void set_intervals(size_t record_id) {
+    if (not exclusion_intervals_map_.contains(record_id)) {
+      gps_exclusion_intervals_.clear();
+
+      for (auto &&chunk : chunks_) {
+        if (chunk->whoami() == ChunkType::GPS) {
+          static_cast<GPSChunk *>(chunk.get())->exclusion_intervals_.clear();
+          break;
+        }
+      }
+      return;
+    }
+
+    gps_exclusion_intervals_ = exclusion_intervals_map_.at(record_id);
+
+    for (auto &&chunk : chunks_) {
+      if (chunk->whoami() == ChunkType::GPS) {
+        static_cast<GPSChunk *>(chunk.get())->exclusion_intervals_ =
+            exclusion_intervals_map_.at(record_id);
+        break;
+      }
+    }
   }
 
   void parse() {
@@ -378,78 +426,91 @@ struct GPMFParser::impl {
     for (auto &&record : records_) {
       lla_.clear();
       create_bag(fmt::format("{}record_{}", set_.output_path_, record.id_));
+      set_intervals(record.id_);
 
       int track_duration{0};
+      bool record_failed{false};
 
-      for (auto &&part : record.parts_) {
+      try {
 
-        MP4Source mp4{part.path_.string()};
+        for (auto &&part : record.parts_) {
 
-        for (auto &&chunk : chunks_) {
-          chunk->reset();
-          chunk->open_mp4(part.path_.string());
-          chunk->set_frame_rate(mp4.frame_rate(chunk->four_cc()[0].data()));
-        }
-
-        track_duration += mp4.duration();
-        mp4.parse(chunks_);
-
-        if (set_.save_geojson_) {
+          MP4Source mp4{part.path_.string()};
 
           for (auto &&chunk : chunks_) {
-            chunk->visit([this](const GPMFChunkBase *chunk) {
-              if (chunk->whoami() != ChunkType::GPS) {
-                return;
-              }
-
-              const auto &m{
-                  static_cast<const GPSChunk *>(chunk)->measurements_};
-
-              lla_ = std::move(lla_) |
-                     ranges::actions::push_back(
-                         m | transform([](auto &&val) { return val.lla_; }));
-
-              gps_fix_ =
-                  std::move(gps_fix_) |
-                  ranges::actions::push_back(
-                      m | transform([](auto &&val) { return val.fix_; }));
-
-              gps_timestamps_ =
-                  std::move(gps_timestamps_) |
-                  ranges::actions::push_back(
-                      m | transform([](auto &&val) { return val.timestamp_; }));
-            });
+            chunk->reset();
+            chunk->open_mp4(part.path_.string());
+            chunk->set_frame_rate(mp4.frame_rate(chunk->four_cc()[0].data()));
           }
+
+          track_duration += mp4.duration();
+          mp4.parse(chunks_);
+
+          if (set_.save_geojson_) {
+
+            for (auto &&chunk : chunks_) {
+              chunk->visit([this](const GPMFChunkBase *chunk) {
+                if (chunk->whoami() != ChunkType::GPS) {
+                  return;
+                }
+
+                const auto &m{
+                    static_cast<const GPSChunk *>(chunk)->measurements_};
+
+                lla_ = std::move(lla_) |
+                       ranges::actions::push_back(
+                           m | transform([](auto &&val) { return val.lla_; }));
+
+                gps_fix_ =
+                    std::move(gps_fix_) |
+                    ranges::actions::push_back(
+                        m | transform([](auto &&val) { return val.fix_; }));
+
+                gps_timestamps_ =
+                    std::move(gps_timestamps_) |
+                    ranges::actions::push_back(m | transform([](auto &&val) {
+                                                 return val.timestamp_;
+                                               }));
+              });
+            }
+          }
+
+          if (set_.callback_) {
+            for (auto &&chunk : chunks_) {
+              chunk->visit(set_.callback_);
+            }
+          }
+
+          write_bag();
         }
 
-        if (set_.callback_) {
-          for (auto &&chunk : chunks_) {
-            chunk->visit(set_.callback_);
-          }
-        }
-
-        write_bag();
+      } catch (const std::exception &ex) {
+        fmt::print(fmt::fg(fmt::color::red), "{}\n", ex.what());
+        record_failed = true;
       }
 
-      total_duration += track_duration;
-
-      fmt::print("\e[38;2;154;205;50mTrack duration: \e[0m"
-                 "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m hours \e[0m"
-                 "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m minuts \e[0m"
-                 "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m "
-                 "seconds\e[0m\n",
-                 track_duration / 3600, (track_duration % 3600) / 60,
-                 (track_duration % 3600) % 60);
-
-      write_geojson(
-          fmt::format("record_{}", record.id_),
-          fmt::format("{}record_{}.geojson", set_.output_path_, record.id_));
-
-      write_gpx(fmt::format("{}record_{}.gpx", set_.output_path_, record.id_));
-
-      track_length();
-
       close_bag();
+
+      if (not record_failed) {
+        total_duration += track_duration;
+
+        fmt::print("\e[38;2;154;205;50mTrack duration: \e[0m"
+                   "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m hours \e[0m"
+                   "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m minutes \e[0m"
+                   "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m "
+                   "seconds\e[0m\n",
+                   track_duration / 3600, (track_duration % 3600) / 60,
+                   (track_duration % 3600) % 60);
+
+        write_geojson(
+            fmt::format("record_{}", record.id_),
+            fmt::format("{}record_{}.geojson", set_.output_path_, record.id_));
+
+        write_gpx(
+            fmt::format("{}record_{}.gpx", set_.output_path_, record.id_));
+
+        track_length();
+      }
     }
 
     if (set_.save_geojson_) {
@@ -461,7 +522,7 @@ struct GPMFParser::impl {
 
     fmt::print("\e[38;2;154;205;50mTotal duration: \e[0m"
                "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m hours \e[0m"
-               "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m minuts \e[0m"
+               "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m minutes \e[0m"
                "\e[38;2;255;127;80m{}\e[0m\e[38;2;154;205;50m "
                "seconds\e[0m\n",
                total_duration / 3600, (total_duration % 3600) / 60,
@@ -768,7 +829,11 @@ struct GPMFParser::impl {
   }
 
   bool exclude(int64_t timestamp) {
-    for (auto &&[start, end] : set_.gps_exclusion_intervals_) {
+    if (gps_exclusion_intervals_.empty()) {
+      return false;
+    }
+
+    for (auto &&[start, end] : gps_exclusion_intervals_) {
       if (timestamp >= start and timestamp <= end) {
         return true;
       }
@@ -789,6 +854,9 @@ struct GPMFParser::impl {
   std::optional<GeographicLib::LocalCartesian> proj_;
   double track_length_{0.0};
   float track_duration_{0.0f};
+  std::unordered_map<size_t, std::vector<std::pair<int64_t, int64_t>>>
+      exclusion_intervals_map_;
+  std::vector<std::pair<int64_t, int64_t>> gps_exclusion_intervals_;
 };
 
 GPMFParser::GPMFParser(const GPMFParserSettings &set)

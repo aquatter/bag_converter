@@ -40,7 +40,10 @@ void ProgressBar::progress(const std::string &topic, size_t progress) {
   advance(topic, 0);
 }
 
-void ProgressBar::advance(size_t how_much) { advance(info_.front(), how_much); }
+void ProgressBar::advance(size_t how_much) {
+  std::lock_guard<std::mutex> lock{protector_};
+  advance(info_.front(), how_much);
+}
 
 void ProgressBar::advance(ProgressInfo &info, size_t how_much) {
 
@@ -102,6 +105,7 @@ void ProgressBar::advance(const std::string &topic, size_t how_much) {
 }
 
 void ProgressBar::done() {
+  std::lock_guard<std::mutex> lock{protector_};
   fmt::print("\e[{}E", static_cast<int>(info_.size()) - curr_pos_);
 }
 
